@@ -309,14 +309,81 @@ class TestPreferStableIPv6(unittest.TestCase):
     def test_none_passthrough(self):
         self.assertIsNone(ipmod.prefer_stable_ipv6(None))
 
+    def test_ifname_scopes_lookup(self):
+        # 同 /64 双网卡：指定网卡时只能取该网卡的稳定地址，不得串号
+        stable = {
+            "eth0": ["2409:8a1e:991c:c4b0:aaaa::1"],
+            "en0": ["2409:8a1e:991c:c4b0:bbbb::2"],
+        }
+        probe = "2409:8a1e:991c:c4b0:cccc::3"
+        with mock.patch.object(ipmod, "stable_ipv6_addresses",
+                               return_value=stable):
+            self.assertEqual(ipmod.prefer_stable_ipv6(probe, ifname="eth0"),
+                             "2409:8a1e:991c:c4b0:aaaa::1")
+            self.assertEqual(ipmod.prefer_stable_ipv6(probe, ifname="en0"),
+                             "2409:8a1e:991c:c4b0:bbbb::2")
+
+    def test_ifname_without_stable_falls_back(self):
+        # 指定网卡在该 /64 下没有稳定地址时应回退原值，而不是取别网卡的
+        stable = {"eth0": ["2409:8a1e:991c:c4b0:aaaa::1"]}
+        probe = "2409:8a1e:991c:c4b0:cccc::3"
+        with mock.patch.object(ipmod, "stable_ipv6_addresses",
+                               return_value=stable):
+            self.assertEqual(ipmod.prefer_stable_ipv6(probe, ifname="en0"), probe)
+
+    def test_ifname_none_scans_all(self):
+        stable = {"eth0": ["2409:8a1e:991c:c4b0:aaaa::1"]}
+        probe = "2409:8a1e:991c:c4b0:cccc::3"
+        with mock.patch.object(ipmod, "stable_ipv6_addresses",
+                               return_value=stable):
+            self.assertEqual(ipmod.prefer_stable_ipv6(probe, ifname=None),
+                             "2409:8a1e:991c:c4b0:aaaa::1")
+
+
+class TestIfnameOf(unittest.TestCase):
+    def _snic(self, family, address):
+        return type("S", (), {"family": family, "address": address})()
+
+    def test_finds_interface(self):
+        f = mock.MagicMock()
+        f.net_if_addrs.return_value = {
+            "eth0": [self._snic(socket.AF_INET6, "2409:8a1e::9")],
+            "en0": [self._snic(socket.AF_INET6, "2409:8a1e::10")],
+        }
+        with mock.patch.dict("sys.modules", {"psutil": f}):
+            self.assertEqual(ipmod.ifname_of("2409:8a1e::10", "AAAA"), "en0")
+
+    def test_not_found_returns_none(self):
+        f = mock.MagicMock()
+        f.net_if_addrs.return_value = {"eth0": []}
+        with mock.patch.dict("sys.modules", {"psutil": f}):
+            self.assertIsNone(ipmod.ifname_of("2409:8a1e::9", "AAAA"))
+
+    def test_psutil_missing_returns_none(self):
+        with mock.patch.dict("sys.modules", {"psutil": None}):
+            self.assertIsNone(ipmod.ifname_of("2409:8a1e::9", "AAAA"))
+
+
+class TestSourceIfname(unittest.TestCase):
+    def test_interface_name_returned(self):
+        self.assertEqual(ipmod._source_ifname("eth0", "AAAA"), "eth0")
+
+    def test_explicit_ip_returns_none(self):
+        self.assertIsNone(ipmod._source_ifname("2409:8a1e::1", "AAAA"))
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(ipmod._source_ifname("", "AAAA"))
+        self.assertIsNone(ipmod._source_ifname(None, "AAAA"))
+
 
 class TestGetCurrentIP(unittest.TestCase):
-    def _patch(self, local, public, stable=None):
+    def _patch(self, local, public, stable=None, ifname=None):
         return mock.patch.multiple(
             ipmod,
             get_local_ip=mock.Mock(return_value=local),
             get_public_ip=mock.Mock(return_value=public),
             stable_ipv6_addresses=mock.Mock(return_value=stable or {}),
+            ifname_of=mock.Mock(return_value=ifname),
         )
 
     def test_both_equal_returns_that(self):
@@ -342,7 +409,8 @@ class TestGetCurrentIP(unittest.TestCase):
     def test_prefers_stable_address(self):
         stable = {"en0": ["2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"]}
         with self._patch("2409:8a1e:991c:c4b0:eca8:8231:7682:a471",
-                         "2409:8a1e:991c:c4b0:eca8:8231:7682:a471", stable):
+                         "2409:8a1e:991c:c4b0:eca8:8231:7682:a471", stable,
+                         ifname="en0"):
             self.assertEqual(
                 ipmod.get_current_ip("AAAA"),
                 "2409:8a1e:991c:c4b0:3f:abb5:22f6:483e")
@@ -358,6 +426,36 @@ class TestGetCurrentIP(unittest.TestCase):
         stable = {"en0": ["2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"]}
         with self._patch("8.8.8.8", "8.8.8.8", stable):
             self.assertEqual(ipmod.get_current_ip("A"), "8.8.8.8")
+
+    def test_multi_egress_same_prefix_no_cross_interface(self):
+        """多出口同 /64：指定 source=eth0 时不得选到 en0 的稳定地址。"""
+        stable = {
+            "eth0": ["2409:8a1e:991c:c4b0:aaaa::1"],
+            "en0": ["2409:8a1e:991c:c4b0:bbbb::2"],
+        }
+        probe = "2409:8a1e:991c:c4b0:cccc::3"
+        for src, expected in (("eth0", "2409:8a1e:991c:c4b0:aaaa::1"),
+                              ("en0", "2409:8a1e:991c:c4b0:bbbb::2")):
+            with mock.patch.multiple(
+                ipmod,
+                resolve_source=mock.Mock(return_value=probe),
+                get_local_ip=mock.Mock(return_value=probe),
+                get_public_ip=mock.Mock(return_value=probe),
+                stable_ipv6_addresses=mock.Mock(return_value=stable),
+            ):
+                self.assertEqual(
+                    ipmod.get_current_ip("AAAA", source=src), expected)
+
+    def test_auto_ifname_used_when_no_source(self):
+        """未指定 source 时用探测地址反查网卡，限定查找范围。"""
+        stable = {
+            "eth0": ["2409:8a1e:991c:c4b0:aaaa::1"],
+            "en0": ["2409:8a1e:991c:c4b0:bbbb::2"],
+        }
+        probe = "2409:8a1e:991c:c4b0:cccc::3"
+        with self._patch(probe, probe, stable, ifname="en0"):
+            self.assertEqual(ipmod.get_current_ip("AAAA"),
+                             "2409:8a1e:991c:c4b0:bbbb::2")
 
 
 if __name__ == "__main__":

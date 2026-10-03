@@ -264,11 +264,44 @@ def stable_ipv6_addresses():
     return {}
 
 
-def prefer_stable_ipv6(ip):
+def ifname_of(ip, record_type):
+    """返回本机拥有该地址的网卡名；找不到返回 None。
+
+    用于把"稳定地址优选"限定在探测实际使用的网卡上，避免多出口下选到
+    其它网卡的地址（当多条上行处于同一 /64 时尤其重要）。
+    """
+    if not ip or record_type not in _FAMILY:
+        return None
+    try:
+        import psutil
+    except ImportError:  # pragma: no cover
+        return None
+    family = _FAMILY[record_type]
+    target = str(ip).strip().split("%")[0]
+    try:
+        addrs = psutil.net_if_addrs()
+    except Exception:  # noqa: BLE001
+        return None
+    for name, snics in addrs.items():
+        for snic in snics:
+            if snic.family == family and snic.address.split("%")[0] == target:
+                return name
+    return None
+
+
+def _source_ifname(source, record_type):
+    """若 source 是网卡名则返回它；是空或显式 IP 则返回 None。"""
+    if not source or _is_explicit_ip(source, record_type):
+        return None
+    return source
+
+
+def prefer_stable_ipv6(ip, ifname=None):
     """给定一个全局 IPv6，若存在同 /64 的稳定地址则返回它，否则返回原值。
 
     DNS 记录变更存在传播延迟，优先使用不随隐私扩展轮换的稳定地址可减少更新。
-    找不到稳定地址时返回原 ip（保持原行为）。
+    ``ifname`` 非空时**只在指定网卡上**查找稳定地址，避免多出口（多条上行处于
+    同一 /64）时选到其它网卡的地址。找不到稳定地址时返回原 ip。
     """
     if not ip:
         return ip
@@ -279,7 +312,14 @@ def prefer_stable_ipv6(ip):
     if not addr.is_global:
         return ip
     net = ipaddress.ip_network(f"{addr}/64", strict=False)
-    for addrs in stable_ipv6_addresses().values():
+
+    stable = stable_ipv6_addresses()
+    if ifname is not None:
+        candidate_groups = [stable.get(ifname, [])]
+    else:
+        candidate_groups = list(stable.values())
+
+    for addrs in candidate_groups:
         for cand in addrs:
             try:
                 if ipaddress.IPv6Address(cand) in net:
@@ -289,7 +329,6 @@ def prefer_stable_ipv6(ip):
             except ValueError:
                 continue
     return ip
-
 
 
 def get_local_ip(record_type, source=None):
@@ -388,7 +427,12 @@ def get_current_ip(record_type, source=None):
     else:
         return None
 
-    # IPv6：优先稳定地址；用户显式指定源 IP 时不替换
+    # IPv6：优先稳定地址；用户显式指定源 IP 时不替换。
+    # 限定在探测实际使用的网卡上，避免多出口（多条上行同 /64）时选错网卡。
     if record_type == "AAAA" and not _is_explicit_ip(source, record_type):
-        result = prefer_stable_ipv6(result)
+        ifname = _source_ifname(source, record_type)
+        if ifname is None:
+            # 未指定网卡：以内核实际选中的出口地址反查其所属网卡
+            ifname = ifname_of(result, record_type)
+        result = prefer_stable_ipv6(result, ifname=ifname)
     return result
