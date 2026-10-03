@@ -2,6 +2,7 @@
 .env
 
 # DDNS runtime state
+ddns_state.json
 last_ipv6.txt
 
 # Python
@@ -11,6 +12,9 @@ __pycache__/
 venv/
 .pytest_cache/
 .coverage
+*.egg-info/
+build/
+dist/
 
 # OS / editor
 .DS_Store
