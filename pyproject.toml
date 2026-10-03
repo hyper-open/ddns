@@ -12,10 +12,11 @@ license = { text = "MIT" }
 dependencies = [
     "requests>=2.28",
     "python-dotenv>=1.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
-dnspod     = ["tencentcloud-sdk-python>=3.0.1000"]
+tencent    = ["tencentcloud-sdk-python>=3.0.1000"]
 aliyun     = ["alibabacloud_alidns20150109>=3.0.0", "alibabacloud_tea_openapi>=0.3.0"]
 cloudflare = []
 huawei     = ["huaweicloudsdkdns>=3.0.0", "huaweicloudsdkcore>=3.0.0"]

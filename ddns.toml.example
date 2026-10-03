@@ -1,0 +1,38 @@
+# 复制为 ddns.toml 并填写。密钥请放在 .env（见 .env.example），不要写在这里。
+
+[ddns]
+# 服务商: tencent | aliyun | cloudflare | huawei
+provider = "tencent"
+# 记录类型: "AAAA"(IPv6) 或 "A"(IPv4)
+record_type = "AAAA"
+# 主域名
+domain = "example.com"
+# 主机记录前缀；如 home.example.com 填 "home"，根域名填 "@" 或留空
+sub_domain = "home"
+# 记录 TTL（秒）
+ttl = 600
+# 检测间隔（秒）
+check_interval = 60
+# 日志级别: DEBUG | INFO | WARNING | ERROR
+log_level = "INFO"
+# 可选：覆盖状态文件路径（默认 ddns_state.json）
+# state_file = "ddns_state.json"
+
+# 下面是各服务商的可选/附加选项，只需保留所选服务商对应的段。
+# 密钥不在此处配置，写入 .env。
+
+# 腾讯云 DNSPod：无额外选项
+[tencent]
+
+# 阿里云云解析：region 用于推导 endpoint（默认 cn-hangzhou）
+[aliyun]
+region = "cn-hangzhou"
+
+# Cloudflare：zone_id 可选，填了则跳过 zone 查询；proxied 仅对 A 记录生效
+[cloudflare]
+# zone_id = "023e105f4ecef8ad9ca31a8372d0c353"
+proxied = false
+
+# 华为云 DNS：region 必填
+[huawei]
+region = "cn-north-4"

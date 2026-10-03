@@ -2,7 +2,7 @@
 import unittest
 
 from ddns.providers.base import Target
-from ddns.providers.dnspod import DnsPodProvider
+from ddns.providers.tencent import TencentProvider
 
 
 class SdkError(Exception):
@@ -55,7 +55,7 @@ class FakeClient:
 
 def make_provider(client, target=None):
     target = target or Target("example.com", "home", "AAAA", 600)
-    return DnsPodProvider(target, client, models=FakeModels, sdk_error=SdkError)
+    return TencentProvider(target, client, models=FakeModels, sdk_error=SdkError)
 
 
 class TestResolveRecordId(unittest.TestCase):

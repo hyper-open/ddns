@@ -7,7 +7,7 @@ from .base import BaseProvider, Target, require_module
 
 class AliyunProvider(BaseProvider):
     name = "aliyun"
-    required_settings = ("aliyun_access_key_id", "aliyun_access_key_secret")
+    required_settings = ("ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET")
 
     def __init__(self, target: Target, client, models):
         super().__init__(target)
@@ -19,10 +19,11 @@ class AliyunProvider(BaseProvider):
         client_mod = require_module("alibabacloud_alidns20150109.client", "aliyun")
         models = require_module("alibabacloud_alidns20150109.models", "aliyun")
         open_api_models = require_module("alibabacloud_tea_openapi.models", "aliyun")
+        region = cfg.option("region", "cn-hangzhou")
         config = open_api_models.Config(
-            access_key_id=cfg.aliyun_access_key_id,
-            access_key_secret=cfg.aliyun_access_key_secret,
-            endpoint=f"alidns.{cfg.aliyun_region}.aliyuncs.com",
+            access_key_id=cfg.credential("ALIYUN_ACCESS_KEY_ID"),
+            access_key_secret=cfg.credential("ALIYUN_ACCESS_KEY_SECRET"),
+            endpoint=f"alidns.{region}.aliyuncs.com",
         )
         client = client_mod.Client(config)
         target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)

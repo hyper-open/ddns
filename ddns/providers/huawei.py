@@ -8,9 +8,9 @@ from .base import BaseProvider, Target, require_module
 class HuaweiProvider(BaseProvider):
     name = "huawei"
     required_settings = (
-        "huawei_access_key_id",
-        "huawei_secret_access_key",
-        "huawei_region",
+        "HUAWEI_ACCESS_KEY_ID",
+        "HUAWEI_ACCESS_KEY_SECRET",
+        "region",
     )
 
     def __init__(self, target: Target, client, models):
@@ -29,10 +29,11 @@ class HuaweiProvider(BaseProvider):
             dns_client.DnsClient.new_builder()
             .with_credentials(
                 credentials.BasicCredentials(
-                    cfg.huawei_access_key_id, cfg.huawei_secret_access_key
+                    cfg.credential("HUAWEI_ACCESS_KEY_ID"),
+                    cfg.credential("HUAWEI_ACCESS_KEY_SECRET"),
                 )
             )
-            .with_region(region.DnsRegion.value_of(cfg.huawei_region))
+            .with_region(region.DnsRegion.value_of(cfg.option("region")))
             .build()
         )
         target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)

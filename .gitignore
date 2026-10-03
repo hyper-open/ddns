@@ -1,5 +1,10 @@
-# Local secrets
+# Local config with secrets
 .env
+.env.*
+!.env.example
+
+# Local config (may contain zone ids etc.)
+ddns.toml
 
 # DDNS runtime state
 ddns_state.json

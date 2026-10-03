@@ -11,7 +11,7 @@ API_BASE = "https://api.cloudflare.com/client/v4"
 
 class CloudflareProvider(BaseProvider):
     name = "cloudflare"
-    required_settings = ("cloudflare_api_token",)
+    required_settings = ("CLOUDFLARE_API_TOKEN",)
 
     def __init__(self, target: Target, token: str, zone_id: Optional[str],
                  proxied: bool = False, session=None):
@@ -25,8 +25,12 @@ class CloudflareProvider(BaseProvider):
     @classmethod
     def from_config(cls, cfg: Config) -> "CloudflareProvider":
         target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)
-        return cls(target, cfg.cloudflare_api_token, cfg.cloudflare_zone_id,
-                   cfg.cloudflare_proxied)
+        return cls(
+            target,
+            cfg.credential("CLOUDFLARE_API_TOKEN"),
+            cfg.option("zone_id"),
+            bool(cfg.option("proxied", False)),
+        )
 
     def _headers(self):
         return {"Authorization": f"Bearer {self._token}",

@@ -1,4 +1,8 @@
-"""从环境变量加载并校验配置。"""
+"""配置加载：非敏感项读 ddns.toml，密钥读 .env。
+
+凭证变量按服务商统一命名（``{PROVIDER}_ACCESS_KEY_ID`` / ``..._SECRET``），
+每个服务商可选的额外项（区域、zone id 等）放在 TOML 的 ``[<provider>]`` 分段里。
+"""
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,27 +12,31 @@ from dotenv import load_dotenv
 
 from .exceptions import ConfigError
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - 3.8~3.10 回退
+    import tomli as tomllib
+
 VALID_RECORD_TYPES = ("A", "AAAA")
 
-# 各服务商必填的配置字段名（对应 Config 的属性名）
-REQUIRED_SETTINGS = {
-    "dnspod": ("tencent_secret_id", "tencent_secret_key"),
-    "aliyun": ("aliyun_access_key_id", "aliyun_access_key_secret"),
-    "cloudflare": ("cloudflare_api_token",),
-    "huawei": ("huawei_access_key_id", "huawei_secret_access_key", "huawei_region"),
+# 各服务商需要的密钥变量（.env），统一命名
+CREDENTIALS = {
+    "tencent": ("TENCENT_ACCESS_KEY_ID", "TENCENT_ACCESS_KEY_SECRET"),
+    "aliyun": ("ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET"),
+    "cloudflare": ("CLOUDFLARE_API_TOKEN",),
+    "huawei": ("HUAWEI_ACCESS_KEY_ID", "HUAWEI_ACCESS_KEY_SECRET"),
+}
+PROVIDER_NAMES = tuple(CREDENTIALS)
+
+# [<provider>] 段中除密钥外还必填的选项
+REQUIRED_OPTIONS = {
+    "tencent": (),
+    "aliyun": (),
+    "cloudflare": (),
+    "huawei": ("region",),
 }
 
-# 字段名 -> .env 变量名，用于报错提示
-SETTING_ENV_NAMES = {
-    "tencent_secret_id": "TENCENT_SECRET_ID",
-    "tencent_secret_key": "TENCENT_SECRET_KEY",
-    "aliyun_access_key_id": "ALIYUN_ACCESS_KEY_ID",
-    "aliyun_access_key_secret": "ALIYUN_ACCESS_KEY_SECRET",
-    "cloudflare_api_token": "CLOUDFLARE_API_TOKEN",
-    "huawei_access_key_id": "HUAWEI_ACCESS_KEY_ID",
-    "huawei_secret_access_key": "HUAWEI_SECRET_ACCESS_KEY",
-    "huawei_region": "HUAWEI_REGION",
-}
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "ddns.toml"
 
 
 @dataclass
@@ -41,93 +49,100 @@ class Config:
     check_interval: int
     log_level: str
     state_path: Path
-    # 各厂商凭据（None 表示未配置）
-    tencent_secret_id: Optional[str] = None
-    tencent_secret_key: Optional[str] = None
-    aliyun_access_key_id: Optional[str] = None
-    aliyun_access_key_secret: Optional[str] = None
-    aliyun_region: str = "cn-hangzhou"
-    cloudflare_api_token: Optional[str] = None
-    cloudflare_zone_id: Optional[str] = None
-    cloudflare_proxied: bool = False
-    huawei_access_key_id: Optional[str] = None
-    huawei_secret_access_key: Optional[str] = None
-    huawei_region: Optional[str] = None
+    options: dict = field(default_factory=dict)  # [<provider>] 段非敏感选项
+    credentials: dict = field(default_factory=dict)  # 从 .env 读取的密钥
 
-    def missing_settings(self) -> list:
-        """返回当前所选服务商缺失的必填字段对应的环境变量名。"""
-        missing = []
-        for attr in REQUIRED_SETTINGS[self.provider]:
-            if not getattr(self, attr):
-                missing.append(SETTING_ENV_NAMES[attr])
-        return missing
+    def option(self, key, default=None):
+        value = self.options.get(key, default)
+        return default if value in (None, "") else value
+
+    def credential(self, key):
+        return self.credentials.get(key)
 
 
-def _get(env, key, default=None):
-    value = env.get(key)
-    return value if value not in (None, "") else default
+def _default_state_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "ddns_state.json"
 
 
-def load_config(env: Optional[Mapping[str, str]] = None) -> Config:
-    """读取环境变量构造 Config。
+def _read_toml(path: Path) -> dict:
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        raise ConfigError(
+            f"未找到配置文件 {path}，请复制 ddns.toml.example 为 ddns.toml 并填写。"
+        )
+    except (tomllib.TOMLDecodeError, OSError) as e:
+        raise ConfigError(f"读取配置文件失败: {e}") from e
 
-    env 为 None 时先加载同目录 .env（不覆盖已存在的环境变量）。
+
+def load_config(
+    config_path: Optional[Path] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> Config:
+    """加载配置。
+
+    config_path 为 None 时依次取 DDNS_CONFIG 环境变量、默认 ddns.toml。
+    env 为 None 时加载同级 .env 并读取 os.environ；传入 Mapping 便于测试。
     """
     if env is None:
-        load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+        load_dotenv(DEFAULT_CONFIG_PATH.parent / ".env")
         env = os.environ
 
-    provider = _get(env, "DDNS_PROVIDER")
+    if config_path is None:
+        config_path = env.get("DDNS_CONFIG") or DEFAULT_CONFIG_PATH
+    config_path = Path(config_path)
+
+    data = _read_toml(config_path)
+    common = data.get("ddns")
+    if not isinstance(common, dict):
+        raise ConfigError(f"{config_path} 缺少 [ddns] 段。")
+
+    provider = common.get("provider")
     if not provider:
+        raise ConfigError(f"{config_path} 的 [ddns] 段缺少 provider。")
+    if provider not in CREDENTIALS:
         raise ConfigError(
-            "未设置 DDNS_PROVIDER，请在 .env 中指定: "
-            + ", ".join(REQUIRED_SETTINGS)
-        )
-    if provider not in REQUIRED_SETTINGS:
-        raise ConfigError(
-            f"未知的 DDNS_PROVIDER: {provider!r}，可选: "
-            + ", ".join(REQUIRED_SETTINGS)
+            f"未知的 provider: {provider!r}，可选: {', '.join(PROVIDER_NAMES)}"
         )
 
-    record_type = _get(env, "DDNS_RECORD_TYPE", "AAAA").upper()
+    record_type = str(common.get("record_type", "AAAA")).upper()
     if record_type not in VALID_RECORD_TYPES:
         raise ConfigError(
-            f"DDNS_RECORD_TYPE 只能是 {' 或 '.join(VALID_RECORD_TYPES)}，"
+            f"record_type 只能是 {' 或 '.join(VALID_RECORD_TYPES)}，"
             f"收到: {record_type!r}"
         )
 
-    state_path = _get(env, "DDNS_STATE_FILE")
-    if state_path:
-        state_path = Path(state_path)
-    else:
-        state_path = Path(__file__).resolve().parent.parent / "ddns_state.json"
+    options = data.get(provider) or {}
+    if not isinstance(options, dict):
+        raise ConfigError(f"[{provider}] 段格式不正确。")
 
-    cfg = Config(
-        provider=provider,
-        record_type=record_type,
-        domain=_get(env, "DDNS_DOMAIN", "example.com"),
-        sub_domain=_get(env, "DDNS_SUB_DOMAIN", ""),
-        ttl=int(_get(env, "DDNS_TTL", "600")),
-        check_interval=int(_get(env, "DDNS_CHECK_INTERVAL", "60")),
-        log_level=_get(env, "DDNS_LOG_LEVEL", "INFO").upper(),
-        state_path=state_path,
-        tencent_secret_id=_get(env, "TENCENT_SECRET_ID"),
-        tencent_secret_key=_get(env, "TENCENT_SECRET_KEY"),
-        aliyun_access_key_id=_get(env, "ALIYUN_ACCESS_KEY_ID"),
-        aliyun_access_key_secret=_get(env, "ALIYUN_ACCESS_KEY_SECRET"),
-        aliyun_region=_get(env, "ALIYUN_REGION", "cn-hangzhou"),
-        cloudflare_api_token=_get(env, "CLOUDFLARE_API_TOKEN"),
-        cloudflare_zone_id=_get(env, "CLOUDFLARE_ZONE_ID"),
-        cloudflare_proxied=str(_get(env, "CLOUDFLARE_PROXIED", "false")).lower()
-        in ("1", "true", "yes"),
-        huawei_access_key_id=_get(env, "HUAWEI_ACCESS_KEY_ID"),
-        huawei_secret_access_key=_get(env, "HUAWEI_SECRET_ACCESS_KEY"),
-        huawei_region=_get(env, "HUAWEI_REGION"),
-    )
+    credentials = {
+        name: env.get(name) for name in CREDENTIALS[provider]
+    }
 
-    missing = cfg.missing_settings()
+    missing = [n for n, v in credentials.items() if not v]
+    missing += [
+        k for k in REQUIRED_OPTIONS[provider] if options.get(k) in (None, "")
+    ]
     if missing:
         raise ConfigError(
-            f"服务商 {provider!r} 缺少必填配置: {', '.join(missing)}"
+            f"provider {provider!r} 缺少必填配置: {', '.join(missing)}。"
+            f"密钥写入 .env，选项写入 ddns.toml 的 [{provider}] 段。"
         )
-    return cfg
+
+    state_file = common.get("state_file")
+    state_path = Path(state_file) if state_file else _default_state_path()
+
+    return Config(
+        provider=provider,
+        record_type=record_type,
+        domain=common.get("domain", "example.com"),
+        sub_domain=str(common.get("sub_domain", "")),
+        ttl=int(common.get("ttl", 600)),
+        check_interval=int(common.get("check_interval", 60)),
+        log_level=str(common.get("log_level", "INFO")).upper(),
+        state_path=state_path,
+        options=options,
+        credentials=credentials,
+    )

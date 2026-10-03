@@ -9,7 +9,7 @@ from ddns.providers.base import Target
 class TestRegistry(unittest.TestCase):
     def test_known_names(self):
         self.assertEqual(
-            set(PROVIDER_NAMES), {"dnspod", "aliyun", "cloudflare", "huawei"}
+            set(PROVIDER_NAMES), {"tencent", "aliyun", "cloudflare", "huawei"}
         )
 
     def test_unknown_provider_raises(self):
@@ -21,17 +21,18 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(cls.name, "cloudflare")
 
     def test_get_provider_missing_sdk_raises_dependency_error(self):
-        # 未安装腾讯 SDK 时，选中 dnspod 应给出友好依赖错误而非 ImportError。
+        # 未安装腾讯 SDK 时，选中 tencent 应给出友好依赖错误而非 ImportError。
         try:
             import tencentcloud  # noqa: F401
         except ImportError:
             from ddns.exceptions import ProviderDependencyError
 
-            cls = get_provider("dnspod")
+            cls = get_provider("tencent")
             cfg = type("C", (), {
                 "domain": "example.com", "sub_domain": "home",
                 "record_type": "AAAA", "ttl": 600,
-                "tencent_secret_id": "id", "tencent_secret_key": "key",
+                "credential": lambda self, k: "x",
+                "option": lambda self, k, d=None: d,
             })()
             with self.assertRaises(ProviderDependencyError):
                 cls.from_config(cfg)

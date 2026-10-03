@@ -1,7 +1,9 @@
 # 核心依赖（所有服务商都需要）
 requests>=2.28
 python-dotenv>=1.0
+# Python 3.11 以下用于解析 ddns.toml
+tomli>=2.0; python_version < "3.11"
 
 # 各服务商 SDK 为可选依赖，按需安装：
-#   pip install -r requirements.txt "ddns[dnspod]"
+#   pip install -r requirements.txt "ddns[aliyun]"
 # 或见 pyproject.toml 的 optional-dependencies。

@@ -5,27 +5,30 @@ from ..config import Config
 from .base import BaseProvider, Target, require_module
 
 
-class DnsPodProvider(BaseProvider):
-    name = "dnspod"
-    required_settings = ("tencent_secret_id", "tencent_secret_key")
+class TencentProvider(BaseProvider):
+    name = "tencent"
+    required_settings = ("TENCENT_ACCESS_KEY_ID", "TENCENT_ACCESS_KEY_SECRET")
 
     def __init__(self, target: Target, client, models=None, sdk_error=None):
         super().__init__(target)
         self._client = client
         self._models = models or require_module(
-            "tencentcloud.dnspod.v20210323.models", "dnspod"
+            "tencentcloud.dnspod.v20210323.models", "tencent"
         )
         self._sdk_error = sdk_error or require_module(
-            "tencentcloud.common.exception.tencent_cloud_sdk_exception", "dnspod"
+            "tencentcloud.common.exception.tencent_cloud_sdk_exception", "tencent"
         ).TencentCloudSDKException
 
     @classmethod
-    def from_config(cls, cfg: Config) -> "DnsPodProvider":
-        credential = require_module("tencentcloud.common.credential", "dnspod")
+    def from_config(cls, cfg: Config) -> "TencentProvider":
+        credential = require_module("tencentcloud.common.credential", "tencent")
         dnspod_client = require_module(
-            "tencentcloud.dnspod.v20210323.dnspod_client", "dnspod"
+            "tencentcloud.dnspod.v20210323.dnspod_client", "tencent"
         )
-        cred = credential.Credential(cfg.tencent_secret_id, cfg.tencent_secret_key)
+        cred = credential.Credential(
+            cfg.credential("TENCENT_ACCESS_KEY_ID"),
+            cfg.credential("TENCENT_ACCESS_KEY_SECRET"),
+        )
         client = dnspod_client.DnspodClient(cred, "")  # DNSPod 为全局服务，region 传空
         target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)
         return cls(target, client)
