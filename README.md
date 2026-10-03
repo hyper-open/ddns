@@ -343,6 +343,71 @@ record_type = "AAAA"         # 不写 source：走默认路由
 - 出口地址写在探测 socket 上（本地探测 `bind`，公网 API 经带源地址的 HTTP 连接），
   因此返回的是**该出口真实对外的公网 IP**，即使多出口共享同一默认路由也能区分。
 
+### 关于 IPv6 稳定地址与临时地址
+
+开启 IPv6 隐私扩展（RFC 4941，现代系统默认开启）时，一个网卡会有**多个全局 IPv6**，
+共享同一个 /64 前缀，只有后 64 位不同：
+
+```
+inet6 2409:8a1e:991c:c4b0:3f:abb5:22f6:483e  autoconf secured              ← 稳定地址（不随时间变）
+inet6 2409:8a1e:991c:c4b0:203d:e8ab:9e01:f7eb  deprecated autoconf temporary ← 旧临时地址（已弃用）
+inet6 2409:8a1e:991c:c4b0:eca8:8231:7682:a471  autoconf temporary            ← 当前临时地址
+```
+
+- **临时地址**默认每天轮换（`temppltime=86400`），7 天后彻底过期（`tempvltime=604800`），
+  旧地址会短暂以 `deprecated` 状态共存，所以会看到"多个"。
+- 系统在对外主动连接时**优先使用临时地址**（`prefer_tempaddr=1`）。
+- 因此**不指定 `source` 时，探测到的是临时地址**，会随轮换变化，导致每天触发一次 DNS 更新。
+
+> 本工具**不会自动优选稳定地址**：不写 `source` 走默认路由（取临时地址）；
+> 写网卡名取该网卡同地址族第一个非链路本地地址（顺序不确定，不保证是稳定地址）。
+> 若要稳定解析，请**显式把稳定地址写入 `source`**。
+
+**查询稳定地址**（排除带 temporary 标志的地址）：
+
+```bash
+# macOS
+ifconfig en0 | grep 'inet6.*autoconf' | grep -v temporary
+
+# Linux
+ip -6 addr show dev eth0 | grep 'scope global' | grep -v temporary
+```
+
+**查询临时地址**（Linux / macOS 通用，`temporary` 标记）：
+
+```bash
+# macOS，只看临时地址
+ifconfig en0 | grep 'inet6.*temporary'
+
+# Linux，只看临时地址
+ip -6 addr show dev eth0 | grep 'scope global' | grep temporary
+```
+
+**Windows（PowerShell）**
+
+```powershell
+Get-NetIPAddress -AddressFamily IPv6 |
+  Where-Object { $_.IPAddress -notlike 'fe80*' } |
+  Format-Table IPAddress, PrefixOrigin, SuffixOrigin, ValidLifetime, PreferredLifetime
+```
+
+Windows 的 `SuffixOrigin` 为 `Random` 表示临时地址，`Stable`/`EUI64` 表示稳定地址。
+
+拿到稳定地址后写进配置：
+
+```toml
+[[records]]
+sub_domain = "home"
+record_type = "AAAA"
+source = "2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"   # 稳定地址，不随临时地址轮换
+```
+
+> 注意：稳定地址的**前三段（/64 前缀）**在运营商重新分配时仍会变化，这属于拨号/租约层面，
+> 无法通过 `source` 规避；此时写死 `source` 反而会失效，可改用网卡名或不指定。
+> 也可关闭隐私扩展让系统只用稳定地址（**全局生效**，请自行评估）：
+> macOS `sudo sysctl -w net.inet6.ip6.use_tempaddr=0`；
+> Linux `sudo sysctl -w net.ipv6.conf.eth0.use_tempaddr=0`。
+
 ## 运行
 
 ```bash
