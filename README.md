@@ -112,6 +112,90 @@ ddns
 2026-10-03 09:41:01 INFO AAAA 未变化: 2409:8a1e:xxxx::1
 ```
 
+## 多服务商同时更新（多实例）
+
+一个进程只更新一个服务商；要让同一 IP 同时同步到多家，**启动多个实例**即可。
+推荐"每实例一个目录"的布局：目录内各放一份 `ddns.toml` 与 `.env`，密钥从
+**配置文件同级目录**的 `.env` 读取，状态文件默认也落在该目录，实例之间完全隔离。
+
+```text
+ddns-instances/
+├── aliyun/
+│   ├── ddns.toml          # provider = "aliyun"
+│   └── .env               # ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET
+├── cloudflare/
+│   ├── ddns.toml          # provider = "cloudflare"
+│   └── .env               # CLOUDFLARE_API_TOKEN
+└── tencent/
+    ├── ddns.toml          # provider = "tencent"
+    └── .env               # TENCENT_ACCESS_KEY_ID / TENCENT_ACCESS_KEY_SECRET
+```
+
+各目录的 `ddns.toml`：
+
+```toml
+# aliyun/ddns.toml
+[ddns]
+provider = "aliyun"
+record_type = "AAAA"
+domain = "example.com"
+sub_domain = "home"
+
+[aliyun]
+region = "cn-hangzhou"
+```
+
+```toml
+# cloudflare/ddns.toml
+[ddns]
+provider = "cloudflare"
+record_type = "AAAA"
+domain = "example.com"
+sub_domain = "home"
+
+[cloudflare]
+proxied = false
+```
+
+```toml
+# tencent/ddns.toml
+[ddns]
+provider = "tencent"
+record_type = "AAAA"
+domain = "example.com"
+sub_domain = "home"
+
+[tencent]
+```
+
+用 `DDNS_CONFIG` 指定实例，分别启动（每个进程用自己的配置与状态文件）：
+
+```bash
+DDNS_CONFIG=./ddns-instances/aliyun/ddns.toml     python -m ddns &
+DDNS_CONFIG=./ddns-instances/cloudflare/ddns.toml python -m ddns &
+DDNS_CONFIG=./ddns-instances/tencent/ddns.toml    python -m ddns &
+```
+
+systemd 单元示例（每实例一个 unit）：
+
+```ini
+[Unit]
+Description=DDNS (aliyun)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/ddns-instances/aliyun
+Environment=DDNS_CONFIG=/opt/ddns-instances/aliyun/ddns.toml
+ExecStart=/usr/bin/python3 -m ddns
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> 状态文件按 `provider:record_type:fqdn` 分键，即使多个实例共用同一个状态文件也不会互相误判；
+> 但为避免并发写竞态，仍建议每实例独立目录。
+
 ## 测试
 
 ```bash

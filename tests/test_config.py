@@ -157,6 +157,38 @@ class TestLoadConfig(unittest.TestCase):
                                "TENCENT_ACCESS_KEY_SECRET": "k"})
         self.assertEqual(cfg.state_path, Path("/tmp/x.json"))
 
+    def test_default_state_path_next_to_config(self):
+        path = write_toml(TENCENT_TOML)
+        cfg = load_config(path, env={"TENCENT_ACCESS_KEY_ID": "i",
+                                     "TENCENT_ACCESS_KEY_SECRET": "k"})
+        self.assertEqual(cfg.state_path, path.parent / "ddns_state.json")
+
+    def test_relative_state_path_resolved_against_config_dir(self):
+        toml = '[ddns]\nprovider = "tencent"\nstate_file = "s.json"\n'
+        path = write_toml(toml)
+        cfg = load_config(path, env={"TENCENT_ACCESS_KEY_ID": "i",
+                                     "TENCENT_ACCESS_KEY_SECRET": "k"})
+        self.assertEqual(cfg.state_path, path.parent / "s.json")
+
+    def test_env_loaded_from_config_dir(self):
+        """密钥从配置文件同级目录的 .env 读取，支持每实例独立目录。"""
+        import os
+        from unittest import mock
+
+        d = Path(tempfile.mkdtemp())
+        (d / "ddns.toml").write_text(ALIYUN_TOML, encoding="utf-8")
+        (d / ".env").write_text(
+            "ALIYUN_ACCESS_KEY_ID=file-id\nALIYUN_ACCESS_KEY_SECRET=file-secret\n",
+            encoding="utf-8",
+        )
+        clean = {k: v for k, v in os.environ.items()
+                 if not k.startswith(("ALIYUN_", "DDNS_"))}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            os.environ["DDNS_CONFIG"] = str(d / "ddns.toml")
+            cfg = load_config()
+        self.assertEqual(cfg.credential("ALIYUN_ACCESS_KEY_ID"), "file-id")
+        self.assertEqual(cfg.provider, "aliyun")
+
 
 if __name__ == "__main__":
     unittest.main()

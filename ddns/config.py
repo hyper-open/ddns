@@ -60,10 +60,6 @@ class Config:
         return self.credentials.get(key)
 
 
-def _default_state_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "ddns_state.json"
-
-
 def _read_toml(path: Path) -> dict:
     try:
         with open(path, "rb") as f:
@@ -83,15 +79,20 @@ def load_config(
     """加载配置。
 
     config_path 为 None 时依次取 DDNS_CONFIG 环境变量、默认 ddns.toml。
-    env 为 None 时加载同级 .env 并读取 os.environ；传入 Mapping 便于测试。
+    密钥从**配置文件同级**的 .env 加载，因此每个实例可以放在各自目录、
+    各带一份 ddns.toml 与 .env 来运行不同服务商。
+    env 为 None 时读取 os.environ；传入 Mapping 便于测试（跳过 .env 加载）。
     """
-    if env is None:
-        load_dotenv(DEFAULT_CONFIG_PATH.parent / ".env")
-        env = os.environ
-
     if config_path is None:
-        config_path = env.get("DDNS_CONFIG") or DEFAULT_CONFIG_PATH
+        config_path = (
+            env.get("DDNS_CONFIG") if env is not None
+            else os.environ.get("DDNS_CONFIG")
+        ) or DEFAULT_CONFIG_PATH
     config_path = Path(config_path)
+
+    if env is None:
+        load_dotenv(config_path.parent / ".env")
+        env = os.environ
 
     data = _read_toml(config_path)
     common = data.get("ddns")
@@ -132,7 +133,13 @@ def load_config(
         )
 
     state_file = common.get("state_file")
-    state_path = Path(state_file) if state_file else _default_state_path()
+    if not state_file:
+        # 默认放在配置文件同级目录，使每个实例天然独立
+        state_path = config_path.parent / "ddns_state.json"
+    else:
+        state_path = Path(state_file)
+        if not state_path.is_absolute():
+            state_path = config_path.parent / state_path
 
     return Config(
         provider=provider,
