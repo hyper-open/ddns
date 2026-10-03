@@ -57,9 +57,19 @@ class BaseProvider(ABC):
         self.log = logging.getLogger(f"ddns.provider.{self.name}")
 
     @classmethod
+    def build_client(cls, cfg: Config):
+        """构造可跨多条记录复用的底层客户端；无状态客户端返回 None。"""
+        return None
+
+    @classmethod
     @abstractmethod
-    def from_config(cls, cfg: Config) -> "BaseProvider":
-        """用配置构造实例（在此延迟导入厂商 SDK）。"""
+    def from_config(cls, cfg: Config, target: Optional[Target] = None,
+                    client=None) -> "BaseProvider":
+        """用配置构造实例（在此延迟导入厂商 SDK）。
+
+        target 为 None 时回退到配置中的第一条记录；client 为 None 时自行构造，
+        多记录场景由调用方传入共享的 client 以复用连接。
+        """
 
     @abstractmethod
     def resolve_record_id(self) -> Optional[str]:

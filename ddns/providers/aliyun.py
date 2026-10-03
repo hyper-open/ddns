@@ -14,10 +14,9 @@ class AliyunProvider(BaseProvider):
         self._client = client
         self._models = models
 
-    @classmethod
-    def from_config(cls, cfg: Config) -> "AliyunProvider":
+    @staticmethod
+    def build_client(cfg: Config):
         client_mod = require_module("alibabacloud_alidns20150109.client", "aliyun")
-        models = require_module("alibabacloud_alidns20150109.models", "aliyun")
         open_api_models = require_module("alibabacloud_tea_openapi.models", "aliyun")
         region = cfg.option("region", "cn-hangzhou")
         config = open_api_models.Config(
@@ -25,9 +24,14 @@ class AliyunProvider(BaseProvider):
             access_key_secret=cfg.credential("ALIYUN_ACCESS_KEY_SECRET"),
             endpoint=f"alidns.{region}.aliyuncs.com",
         )
-        client = client_mod.Client(config)
-        target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)
-        return cls(target, client, models)
+        return client_mod.Client(config)
+
+    @classmethod
+    def from_config(cls, cfg: Config, target=None, client=None) -> "AliyunProvider":
+        target = target or Target(cfg.records[0].domain, cfg.records[0].sub_domain,
+                                  cfg.records[0].record_type, cfg.records[0].ttl)
+        models = require_module("alibabacloud_alidns20150109.models", "aliyun")
+        return cls(target, client or cls.build_client(cfg), models)
 
     def resolve_record_id(self) -> Optional[str]:
         req = self._models.DescribeDomainRecordsRequest(

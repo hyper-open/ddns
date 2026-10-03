@@ -28,9 +28,9 @@ class TestRegistry(unittest.TestCase):
             from ddns.exceptions import ProviderDependencyError
 
             cls = get_provider("tencent")
+            from ddns.config import RecordTarget
             cfg = type("C", (), {
-                "domain": "example.com", "sub_domain": "home",
-                "record_type": "AAAA", "ttl": 600,
+                "records": [RecordTarget("example.com", "home", "AAAA", 600)],
                 "credential": lambda self, k: "x",
                 "option": lambda self, k, d=None: d,
             })()

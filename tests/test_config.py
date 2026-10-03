@@ -56,11 +56,14 @@ class TestLoadConfig(unittest.TestCase):
                           env={"TENCENT_ACCESS_KEY_ID": "id",
                                "TENCENT_ACCESS_KEY_SECRET": "key"})
         self.assertEqual(cfg.provider, "tencent")
-        self.assertEqual(cfg.record_type, "AAAA")
-        self.assertEqual(cfg.ttl, 600)
+        self.assertEqual(len(cfg.records), 1)
+        rec = cfg.records[0]
+        self.assertEqual(rec.record_type, "AAAA")
+        self.assertEqual(rec.domain, "example.com")
+        self.assertEqual(rec.sub_domain, "home")
+        self.assertEqual(rec.ttl, 600)
         self.assertEqual(cfg.check_interval, 60)
         self.assertEqual(cfg.log_level, "INFO")
-        self.assertEqual(cfg.sub_domain, "home")
 
     def test_missing_config_file(self):
         with self.assertRaises(ConfigError) as ctx:
@@ -93,7 +96,7 @@ class TestLoadConfig(unittest.TestCase):
         cfg = load_config(write_toml(toml),
                           env={"TENCENT_ACCESS_KEY_ID": "i",
                                "TENCENT_ACCESS_KEY_SECRET": "k"})
-        self.assertEqual(cfg.record_type, "A")
+        self.assertEqual(cfg.records[0].record_type, "A")
 
     def test_invalid_toml_syntax(self):
         with self.assertRaises(ConfigError):
@@ -169,6 +172,82 @@ class TestLoadConfig(unittest.TestCase):
         cfg = load_config(path, env={"TENCENT_ACCESS_KEY_ID": "i",
                                      "TENCENT_ACCESS_KEY_SECRET": "k"})
         self.assertEqual(cfg.state_path, path.parent / "s.json")
+
+    def test_records_list(self):
+        toml = """
+[ddns]
+provider = "aliyun"
+
+[[records]]
+domain = "example.com"
+sub_domain = "home"
+record_type = "AAAA"
+
+[[records]]
+domain = "example.com"
+sub_domain = "www"
+record_type = "A"
+ttl = 300
+
+[aliyun]
+"""
+        cfg = load_config(write_toml(toml),
+                          env={"ALIYUN_ACCESS_KEY_ID": "i",
+                               "ALIYUN_ACCESS_KEY_SECRET": "s"})
+        self.assertEqual(len(cfg.records), 2)
+        self.assertEqual(cfg.records[0].sub_domain, "home")
+        self.assertEqual(cfg.records[1].sub_domain, "www")
+        self.assertEqual(cfg.records[1].record_type, "A")
+        self.assertEqual(cfg.records[1].ttl, 300)
+
+    def test_records_inherit_common_defaults(self):
+        toml = """
+[ddns]
+provider = "aliyun"
+domain = "example.com"
+record_type = "A"
+ttl = 900
+
+[[records]]
+sub_domain = "a"
+
+[[records]]
+sub_domain = "b"
+record_type = "AAAA"
+"""
+        cfg = load_config(write_toml(toml),
+                          env={"ALIYUN_ACCESS_KEY_ID": "i",
+                               "ALIYUN_ACCESS_KEY_SECRET": "s"})
+        self.assertEqual(cfg.records[0].domain, "example.com")
+        self.assertEqual(cfg.records[0].record_type, "A")
+        self.assertEqual(cfg.records[0].ttl, 900)
+        self.assertEqual(cfg.records[1].record_type, "AAAA")
+        self.assertEqual(cfg.records[1].ttl, 900)
+
+    def test_record_missing_domain(self):
+        toml = """
+[ddns]
+provider = "aliyun"
+domain = "example.com"
+
+[[records]]
+sub_domain = "a"
+
+[[records]]
+sub_domain = "b"
+domain = ""
+"""
+        with self.assertRaises(ConfigError):
+            load_config(write_toml(toml),
+                        env={"ALIYUN_ACCESS_KEY_ID": "i",
+                             "ALIYUN_ACCESS_KEY_SECRET": "s"})
+
+    def test_empty_records_rejected(self):
+        toml = '[ddns]\nprovider = "aliyun"\ndomain = "example.com"\nrecords = []\n'
+        with self.assertRaises(ConfigError):
+            load_config(write_toml(toml),
+                        env={"ALIYUN_ACCESS_KEY_ID": "i",
+                             "ALIYUN_ACCESS_KEY_SECRET": "s"})
 
     def test_env_loaded_from_config_dir(self):
         """密钥从配置文件同级目录的 .env 读取，支持每实例独立目录。"""

@@ -22,14 +22,22 @@ class CloudflareProvider(BaseProvider):
         self._session = session or requests.Session()
         self._session.trust_env = False
 
+    @staticmethod
+    def build_client(cfg: Config):
+        session = requests.Session()
+        session.trust_env = False  # 忽略系统代理，避免 IPv6 走代理中断
+        return session
+
     @classmethod
-    def from_config(cls, cfg: Config) -> "CloudflareProvider":
-        target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)
+    def from_config(cls, cfg: Config, target=None, client=None) -> "CloudflareProvider":
+        target = target or Target(cfg.records[0].domain, cfg.records[0].sub_domain,
+                                  cfg.records[0].record_type, cfg.records[0].ttl)
         return cls(
             target,
             cfg.credential("CLOUDFLARE_API_TOKEN"),
             cfg.option("zone_id"),
             bool(cfg.option("proxied", False)),
+            session=client or cls.build_client(cfg),
         )
 
     def _headers(self):

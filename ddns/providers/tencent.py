@@ -19,8 +19,8 @@ class TencentProvider(BaseProvider):
             "tencentcloud.common.exception.tencent_cloud_sdk_exception", "tencent"
         ).TencentCloudSDKException
 
-    @classmethod
-    def from_config(cls, cfg: Config) -> "TencentProvider":
+    @staticmethod
+    def build_client(cfg: Config):
         credential = require_module("tencentcloud.common.credential", "tencent")
         dnspod_client = require_module(
             "tencentcloud.dnspod.v20210323.dnspod_client", "tencent"
@@ -29,9 +29,13 @@ class TencentProvider(BaseProvider):
             cfg.credential("TENCENT_ACCESS_KEY_ID"),
             cfg.credential("TENCENT_ACCESS_KEY_SECRET"),
         )
-        client = dnspod_client.DnspodClient(cred, "")  # DNSPod 为全局服务，region 传空
-        target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)
-        return cls(target, client)
+        return dnspod_client.DnspodClient(cred, "")  # DNSPod 为全局服务，region 传空
+
+    @classmethod
+    def from_config(cls, cfg: Config, target=None, client=None) -> "TencentProvider":
+        target = target or Target(cfg.records[0].domain, cfg.records[0].sub_domain,
+                                  cfg.records[0].record_type, cfg.records[0].ttl)
+        return cls(target, client or cls.build_client(cfg))
 
     def resolve_record_id(self) -> Optional[str]:
         req = self._models.DescribeRecordListRequest()

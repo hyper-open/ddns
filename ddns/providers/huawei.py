@@ -18,14 +18,12 @@ class HuaweiProvider(BaseProvider):
         self._client = client
         self._models = models
 
-    @classmethod
-    def from_config(cls, cfg: Config) -> "HuaweiProvider":
-        credentials = require_module(
-            "huaweicloudsdkcore.auth.credentials", "huawei"
-        )
+    @staticmethod
+    def build_client(cfg: Config):
+        credentials = require_module("huaweicloudsdkcore.auth.credentials", "huawei")
         dns_client = require_module("huaweicloudsdkdns.v2", "huawei")
         region = require_module("huaweicloudsdkdns.v2.region.dns_region", "huawei")
-        client = (
+        return (
             dns_client.DnsClient.new_builder()
             .with_credentials(
                 credentials.BasicCredentials(
@@ -36,8 +34,13 @@ class HuaweiProvider(BaseProvider):
             .with_region(region.DnsRegion.value_of(cfg.option("region")))
             .build()
         )
-        target = Target(cfg.domain, cfg.sub_domain, cfg.record_type, cfg.ttl)
-        return cls(target, client, dns_client)
+
+    @classmethod
+    def from_config(cls, cfg: Config, target=None, client=None) -> "HuaweiProvider":
+        target = target or Target(cfg.records[0].domain, cfg.records[0].sub_domain,
+                                  cfg.records[0].record_type, cfg.records[0].ttl)
+        dns_client = require_module("huaweicloudsdkdns.v2", "huawei")
+        return cls(target, client or cls.build_client(cfg), dns_client)
 
     def _zone_id(self) -> Optional[str]:
         req = self._models.ListPublicZonesRequest(name=self.target.domain)

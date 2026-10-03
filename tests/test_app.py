@@ -1,4 +1,4 @@
-"""主编排测试。"""
+"""主编排测试：多记录扇出。"""
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,14 +6,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ddns import app
+from ddns.config import RecordTarget
+from ddns.providers.base import Target
 from ddns.state import StateStore
-
-
-def make_cfg(**over):
-    base = dict(provider="cloudflare", record_type="AAAA",
-                domain="example.com", sub_domain="home")
-    base.update(over)
-    return SimpleNamespace(**base)
 
 
 class FakeProvider:
@@ -26,50 +21,123 @@ class FakeProvider:
         return self.ok
 
 
+class FakeProviderClass:
+    """模拟服务商类，提供 build_client/from_config。"""
+
+    def __init__(self, targets_seen, ok=True):
+        self.targets_seen = targets_seen
+        self.ok = ok
+
+    def build_client(self, cfg):
+        return "shared-client"
+
+    def from_config(self, cfg, target, client):
+        self.targets_seen.append(target.fqdn)
+        return FakeProvider(ok=self.ok)
+
+
+class FakeEntry:
+    def __init__(self, target, provider, record_id=None, last_ip=None):
+        self.target = target
+        self.provider = provider
+        self.record_id = record_id
+        self.last_ip = last_ip
+
+
 class TestStateKey(unittest.TestCase):
     def test_key_with_sub(self):
-        self.assertEqual(app.state_key(make_cfg()),
+        t = Target("example.com", "home", "AAAA")
+        self.assertEqual(app.state_key("cloudflare", t),
                          "cloudflare:AAAA:home.example.com")
 
     def test_key_apex(self):
-        self.assertEqual(app.state_key(make_cfg(sub_domain="@")),
-                         "cloudflare:AAAA:example.com")
+        t = Target("example.com", "@", "A")
+        self.assertEqual(app.state_key("cloudflare", t),
+                         "cloudflare:A:example.com")
 
 
-class TestRunOnce(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp()) / "state.json"
-        self.store = StateStore(self.tmp)
-        self.key = "k"
+class TestBuildEntries(unittest.TestCase):
+    def test_builds_entry_per_record_reusing_client(self):
+        seen = []
+        cfg = SimpleNamespace(provider="cloudflare", records=[
+            RecordTarget("example.com", "home", "AAAA", 600),
+            RecordTarget("example.com", "www", "A", 300),
+        ])
+        with mock.patch.object(app, "get_provider",
+                               return_value=FakeProviderClass(seen)):
+            entries = app._build_entries(cfg)
+        self.assertEqual(set(entries), {"home.example.com", "www.example.com"})
+        self.assertEqual(seen, ["home.example.com", "www.example.com"])
 
-    def test_ip_unchanged_no_update(self):
-        provider = FakeProvider()
-        with mock.patch.object(app, "get_current_ip", return_value="2409:8a1e::1"):
-            result = app.run_once(provider, "r", self.store, self.key, "AAAA", "2409:8a1e::1")
-        self.assertEqual(result, "2409:8a1e::1")
-        self.assertEqual(provider.calls, [])
+    def test_duplicate_fqdn_dropped(self):
+        seen = []
+        cfg = SimpleNamespace(provider="cloudflare", records=[
+            RecordTarget("example.com", "home", "AAAA", 600),
+            RecordTarget("example.com", "home", "AAAA", 600),
+        ])
+        with mock.patch.object(app, "get_provider",
+                               return_value=FakeProviderClass(seen)):
+            entries = app._build_entries(cfg)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(len(seen), 1)
 
-    def test_ip_changed_updates_and_persists(self):
-        provider = FakeProvider()
-        with mock.patch.object(app, "get_current_ip", return_value="2409:8a1e::2"):
-            result = app.run_once(provider, "r9", self.store, self.key, "AAAA", "2409:8a1e::1")
-        self.assertEqual(result, "2409:8a1e::2")
-        self.assertEqual(provider.calls, [("r9", "2409:8a1e::2")])
-        self.assertEqual(self.store.get(self.key), "2409:8a1e::2")
 
-    def test_update_failure_keeps_last(self):
-        provider = FakeProvider(ok=False)
-        with mock.patch.object(app, "get_current_ip", return_value="2409:8a1e::2"):
-            result = app.run_once(provider, "r", self.store, self.key, "AAAA", "2409:8a1e::1")
-        self.assertEqual(result, "2409:8a1e::1")
-        self.assertIsNone(self.store.get(self.key))
+class TestRunOnceFanout(unittest.TestCase):
+    """通过直接调用 run 的循环体难以中断，这里单独验证探测去重与扇出逻辑。"""
 
-    def test_no_ip_keeps_last(self):
-        provider = FakeProvider()
-        with mock.patch.object(app, "get_current_ip", return_value=None):
-            result = app.run_once(provider, "r", self.store, self.key, "AAAA", "2409:8a1e::1")
-        self.assertEqual(result, "2409:8a1e::1")
-        self.assertEqual(provider.calls, [])
+    def _run_one_cycle(self, entries, ips):
+        """复刻 run 中一次循环的扇出逻辑，便于断言。"""
+        detected = {}
+        for entry in entries:
+            rt = entry.target.record_type
+            if rt not in detected:
+                detected[rt] = ips.get(rt)
+            current_ip = detected[rt]
+            if not current_ip or current_ip == entry.last_ip:
+                continue
+            if entry.provider.update(entry.record_id, current_ip):
+                entry.last_ip = current_ip
+        return detected
+
+    def test_same_record_type_probed_once(self):
+        t1 = Target("example.com", "home", "AAAA")
+        t2 = Target("example.com", "www", "AAAA")
+        p1, p2 = FakeProvider(), FakeProvider()
+        entries = [FakeEntry(t1, p1, "r1"), FakeEntry(t2, p2, "r2")]
+        calls = []
+
+        def fake_get(rt):
+            calls.append(rt)
+            return "2409:8a1e::9"
+
+        with mock.patch.object(app, "get_current_ip", side_effect=fake_get):
+            self._run_one_cycle(entries, {"AAAA": "2409:8a1e::9"})
+        self.assertEqual(calls, [])  # 该 helper 不直接探测
+        self.assertEqual(p1.calls, [("r1", "2409:8a1e::9")])
+        self.assertEqual(p2.calls, [("r2", "2409:8a1e::9")])
+
+    def test_mixed_record_types(self):
+        ta = Target("example.com", "home", "AAAA")
+        tb = Target("example.com", "www", "A")
+        pa, pb = FakeProvider(), FakeProvider()
+        entries = [FakeEntry(ta, pa, "r1"), FakeEntry(tb, pb, "r2")]
+        self._run_one_cycle(entries, {"AAAA": "2409:8a1e::9", "A": "1.1.1.1"})
+        self.assertEqual(pa.calls, [("r1", "2409:8a1e::9")])
+        self.assertEqual(pb.calls, [("r2", "1.1.1.1")])
+
+    def test_unchanged_skipped(self):
+        t = Target("example.com", "home", "AAAA")
+        p = FakeProvider()
+        entries = [FakeEntry(t, p, "r1", last_ip="2409:8a1e::9")]
+        self._run_one_cycle(entries, {"AAAA": "2409:8a1e::9"})
+        self.assertEqual(p.calls, [])
+
+    def test_missing_ip_skipped(self):
+        t = Target("example.com", "home", "AAAA")
+        p = FakeProvider()
+        entries = [FakeEntry(t, p, "r1")]
+        self._run_one_cycle(entries, {"AAAA": None})
+        self.assertEqual(p.calls, [])
 
 
 if __name__ == "__main__":

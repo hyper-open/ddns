@@ -55,21 +55,38 @@ cp .env.example .env
 
 ### `ddns.toml`
 
+一个进程可维护**多条记录**（同一服务商）。用 `[[records]]` 列出每条记录，公共项可在 `[ddns]` 里设置默认值、在记录里覆盖：
+
 ```toml
 [ddns]
 provider = "aliyun"        # tencent | aliyun | cloudflare | huawei
-record_type = "AAAA"       # AAAA(IPv6) | A(IPv4)
-domain = "example.com"
-sub_domain = "home"        # 前缀；根域名填 "@" 或留空
-ttl = 600
 check_interval = 60
 log_level = "INFO"
-# state_file = "ddns_state.json"   # 可选
+# 公共默认值（可被每条记录覆盖）
+domain = "example.com"
+record_type = "AAAA"
+ttl = 600
+# state_file = "ddns_state.json"   # 可选，相对路径相对本文件所在目录
+
+[[records]]
+domain = "example.com"
+sub_domain = "home"        # 前缀；根域名填 "@" 或留空
+record_type = "AAAA"
+
+[[records]]
+domain = "example.com"
+sub_domain = "www"
+record_type = "A"
+ttl = 300
 
 # 只保留所选服务商对应的段
 [aliyun]
 region = "cn-hangzhou"     # 可选，用于推导 endpoint
 ```
+
+省略 `[[records]]` 时，退化为 `[ddns]` 里的单条 `domain`/`sub_domain`。
+
+每条记录的字段：`domain`(未设则用 `[ddns].domain`)、`sub_domain`、`record_type`(`A`/`AAAA`)、`ttl`。
 
 各服务商可选的 `[<provider>]` 段：
 
@@ -80,7 +97,35 @@ region = "cn-hangzhou"     # 可选，用于推导 endpoint
 | `[cloudflare]` | `zone_id`、`proxied` | `zone_id` 可选（填了跳过 zone 查询）；`proxied` 仅对 A 记录生效 |
 | `[huawei]` | `region` | **必填** |
 
-`[ddns]` 通用项：`provider`(必填)、`record_type`、`domain`、`sub_domain`、`ttl`、`check_interval`、`log_level`、`state_file`。
+`[ddns]` 通用项：`provider`(必填)、`check_interval`、`log_level`、`state_file`，以及可作为默认值的 `domain`、`sub_domain`、`record_type`、`ttl`。
+
+## 多域名 / 多子域名
+
+在同一份 `ddns.toml` 里加多个 `[[records]]` 即可，一个进程启动时解析各自的记录 ID，
+循环中**每种记录类型只探测一次公网 IP**，再扇出更新所有记录：
+
+```toml
+[ddns]
+provider = "aliyun"
+
+[[records]]
+domain = "example.com"
+sub_domain = "home"
+record_type = "AAAA"
+
+[[records]]
+domain = "example.com"
+sub_domain = "www"
+record_type = "AAAA"     # 与上面同类型，共享同一次探测
+
+[[records]]
+domain = "other.com"
+sub_domain = "@"         # 根域名
+record_type = "A"        # IPv4，单独探测一次
+```
+
+> 限制：`[[records]]` 共享同一个服务商与凭据。要跨服务商（如 A 域名在阿里云、B 域名在 Cloudflare），
+> 仍用下面的多实例方式。
 
 ### `.env`（密钥）
 

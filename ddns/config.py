@@ -40,12 +40,19 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "ddns.toml"
 
 
 @dataclass
-class Config:
-    provider: str
-    record_type: str
+class RecordTarget:
+    """一条待维护的 DNS 记录。"""
+
     domain: str
     sub_domain: str
+    record_type: str
     ttl: int
+
+
+@dataclass
+class Config:
+    provider: str
+    records: list  # list[RecordTarget]
     check_interval: int
     log_level: str
     state_path: Path
@@ -107,12 +114,32 @@ def load_config(
             f"未知的 provider: {provider!r}，可选: {', '.join(PROVIDER_NAMES)}"
         )
 
-    record_type = str(common.get("record_type", "AAAA")).upper()
-    if record_type not in VALID_RECORD_TYPES:
-        raise ConfigError(
-            f"record_type 只能是 {' 或 '.join(VALID_RECORD_TYPES)}，"
-            f"收到: {record_type!r}"
-        )
+    # 记录列表：优先 [[records]]（顶层或 [ddns] 内），否则回退单条 domain/sub_domain
+    raw_records = data.get("records", common.get("records"))
+    if raw_records is None:
+        raw_records = [common]
+    if not isinstance(raw_records, list) or not raw_records:
+        raise ConfigError("至少需要一条记录（[[records]] 或 [ddns] 中的 domain/sub_domain）。")
+
+    records = []
+    for i, item in enumerate(raw_records, 1):
+        if not isinstance(item, dict):
+            raise ConfigError(f"第 {i} 条记录格式不正确，应为表（[[records]]）。")
+        rtype = str(item.get("record_type", common.get("record_type", "AAAA"))).upper()
+        if rtype not in VALID_RECORD_TYPES:
+            raise ConfigError(
+                f"第 {i} 条记录的 record_type 只能是 {' 或 '.join(VALID_RECORD_TYPES)}，"
+                f"收到: {rtype!r}"
+            )
+        domain = item.get("domain", common.get("domain", "example.com"))
+        if not domain:
+            raise ConfigError(f"第 {i} 条记录缺少 domain。")
+        records.append(RecordTarget(
+            domain=domain,
+            sub_domain=str(item.get("sub_domain", common.get("sub_domain", ""))),
+            record_type=rtype,
+            ttl=int(item.get("ttl", common.get("ttl", 600))),
+        ))
 
     options = data.get(provider) or {}
     if not isinstance(options, dict):
@@ -143,10 +170,7 @@ def load_config(
 
     return Config(
         provider=provider,
-        record_type=record_type,
-        domain=common.get("domain", "example.com"),
-        sub_domain=str(common.get("sub_domain", "")),
-        ttl=int(common.get("ttl", 600)),
+        records=records,
         check_interval=int(common.get("check_interval", 60)),
         log_level=str(common.get("log_level", "INFO")).upper(),
         state_path=state_path,

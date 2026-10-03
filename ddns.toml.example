@@ -3,23 +3,40 @@
 [ddns]
 # 服务商: tencent | aliyun | cloudflare | huawei
 provider = "tencent"
-# 记录类型: "AAAA"(IPv6) 或 "A"(IPv4)
-record_type = "AAAA"
-# 主域名
-domain = "example.com"
-# 主机记录前缀；如 home.example.com 填 "home"，根域名填 "@" 或留空
-sub_domain = "home"
-# 记录 TTL（秒）
-ttl = 600
 # 检测间隔（秒）
 check_interval = 60
 # 日志级别: DEBUG | INFO | WARNING | ERROR
 log_level = "INFO"
-# 可选：覆盖状态文件路径（默认 ddns_state.json）
+# 可选：覆盖状态文件路径（相对路径相对本文件所在目录，默认 ddns_state.json）
 # state_file = "ddns_state.json"
 
-# 下面是各服务商的可选/附加选项，只需保留所选服务商对应的段。
-# 密钥不在此处配置，写入 .env。
+# 公共默认值（可被每条记录覆盖）
+domain = "example.com"
+record_type = "AAAA"
+ttl = 600
+sub_domain = ""
+
+# ===== 记录列表 =====
+# 一个进程探测一次 IP，扇出更新下面所有记录（同一服务商）。
+# 若省略 [[records]]，则用上面 [ddns] 的 domain/sub_domain 作为单条记录。
+
+[[records]]
+domain = "example.com"
+sub_domain = "home"
+record_type = "AAAA"
+
+[[records]]
+domain = "example.com"
+sub_domain = "www"
+record_type = "A"
+ttl = 300
+
+# [[records]]
+# domain = "other.com"
+# sub_domain = "@"          # 根域名用 @ 或留空
+# record_type = "AAAA"
+
+# ===== 各服务商选项（只保留所选服务商的段）=====
 
 # 腾讯云 DNSPod：无额外选项
 [tencent]
