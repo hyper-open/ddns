@@ -312,18 +312,40 @@ ddns
 2026-10-03 09:41:00 INFO home.example.com AAAA 未变化: 2409:8a1e:xxxx::1
 ```
 
-### 长期运行（systemd）
+## 长期运行
+
+本工具是常驻循环进程，需交给系统服务管理器托管，实现开机自启、崩溃重拉、日志留存。
+
+先在终端确认 Python 绝对路径（自启服务不继承你的 shell 环境，必须写全路径）：
+
+```bash
+# macOS / Linux
+command -v python3        # 例：/usr/local/bin/python3
+# Windows (PowerShell / CMD)
+where python              # 例：C:\Python311\python.exe
+```
+
+> 下面以单实例（阿里云）为例，目录统一用 `<实例目录>` 表示，请替换成你的真实路径，
+> 例如 Linux `/opt/ddns-instances/aliyun`、macOS `/Users/yourname/ddns-instances/aliyun`、
+> Windows `C:\ddns-instances\aliyun`。多实例就照抄多份、改 `DDNS_CONFIG` 与目录名。
+
+### Linux（systemd）
+
+适用于大多数发行版（Debian/Ubuntu/CentOS/NAS 等）。推荐做成**模板单元**，一个文件跑多个实例。
+
+`/etc/systemd/system/ddns@.service`：
 
 ```ini
 [Unit]
-Description=DDNS (aliyun)
+Description=DDNS (%i)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=/opt/ddns-instances/aliyun
-Environment=DDNS_CONFIG=/opt/ddns-instances/aliyun/ddns.toml
-ExecStart=/usr/bin/python3 -m ddns
+Type=simple
+WorkingDirectory=/opt/ddns-instances/%i
+Environment=DDNS_CONFIG=/opt/ddns-instances/%i/ddns.toml
+ExecStart=/usr/local/bin/python3 -m ddns
 Restart=always
 RestartSec=10
 
@@ -331,11 +353,141 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
+启用与查看：
+
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now ddns@aliyun   # 若做成模板单元
-sudo journalctl -u ddns -f                # 看日志
+sudo systemctl enable --now ddns@aliyun        # @ 后是实例目录名
+systemctl status ddns@aliyun
+journalctl -u ddns@aliyun -f                  # 实时日志
 ```
+
+> 若不想用 root，可放到 `~/.config/systemd/user/ddns@.service`，用
+> `systemctl --user enable --now ddns@aliyun`，并 `loginctl enable-linger $USER` 让用户服务在未登录时也运行。
+
+### macOS（launchd）
+
+创建 `~/Library/LaunchAgents/com.example.ddns.aliyun.plist`（Label 每个实例唯一）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.ddns.aliyun</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3</string>
+        <string>-m</string>
+        <string>ddns</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yourname/ddns-instances/aliyun</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DDNS_CONFIG</key>
+        <string>/Users/yourname/ddns-instances/aliyun/ddns.toml</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/yourname/ddns-instances/aliyun/ddns.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/yourname/ddns-instances/aliyun/ddns.err.log</string>
+</dict>
+</plist>
+```
+
+加载与管理：
+
+```bash
+# 加载（现代写法，macOS 10.13+）
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.ddns.aliyun.plist
+
+# 查看状态 / 日志
+launchctl list | grep ddns
+tail -f ~/ddns-instances/aliyun/ddns.log
+
+# 停止 / 卸载
+launchctl bootout gui/$(id -u)/com.example.ddns.aliyun
+
+# 改了 plist 后重新加载
+launchctl bootout gui/$(id -u)/com.example.ddns.aliyun 2>/dev/null
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.ddns.aliyun.plist
+```
+
+> 注意：macOS 上自启服务**不会读取你的 shell 配置**（`.zshrc`/`.bash_profile`），
+> 所以 `DDNS_CONFIG`、Python 路径都必须写绝对路径，不能依赖 PATH 或别名。
+> 用 Homebrew 装的 Python 路径通常是 `/usr/local/bin/python3`（Intel）或 `/opt/homebrew/bin/python3`（Apple Silicon）。
+
+### Windows（任务计划程序）
+
+Windows 无 systemd，用**任务计划程序**以"无论用户是否登录"方式常驻。推荐先写一个启动脚本
+`C:\ddns-instances\aliyun\run.bat`：
+
+```bat
+@echo off
+set DDNS_CONFIG=C:\ddns-instances\aliyun\ddns.toml
+cd /d C:\ddns-instances\aliyun
+"C:\Python311\python.exe" -m ddns >> ddns.log 2>&1
+```
+
+注册开机任务（管理员 CMD）：
+
+```bat
+schtasks /Create /TN "DDNS-aliyun" ^
+  /TR "C:\ddns-instances\aliyun\run.bat" ^
+  /SC ONSTART /RU SYSTEM /RL HIGHEST /F
+```
+
+管理：
+
+```bat
+schtasks /Run    /TN "DDNS-aliyun"
+schtasks /Query  /TN "DDNS-aliyun" /V /FO LIST
+schtasks /Delete /TN "DDNS-aliyun" /F
+```
+
+> `/RU SYSTEM` 以系统账户运行，不弹窗、不要求登录；若日志要写到用户目录或用用户级凭据，
+> 改成 `/RU 你的用户名 /RP 密码`。
+> 图形界面里对应设置是：触发器"启动时"、勾选"不管用户是否登录都要运行"、勾选"如果任务失败，按以下频率重新启动"。
+
+**可选：注册成真正的 Windows 服务**（崩溃自动重启，无需登录）。用 [NSSM](https://nssm.cc/)：
+
+```bat
+nssm install DDNS-aliyun "C:\Python311\python.exe" "-m ddns"
+nssm set DDNS-aliyun AppDirectory "C:\ddns-instances\aliyun"
+nssm set DDNS-aliyun AppEnvironmentExtra DDNS_CONFIG=C:\ddns-instances\aliyun\ddns.toml
+nssm set DDNS-aliyun AppStdout "C:\ddns-instances\aliyun\ddns.log"
+nssm set DDNS-aliyun AppStderr "C:\ddns-instances\aliyun\ddns.err.log"
+nssm start DDNS-aliyun
+```
+
+### 三平台对照
+
+| | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| 托管方式 | systemd | launchd | 任务计划程序 / NSSM |
+| 配置文件位置 | `/etc/systemd/system/ddns@.service` | `~/Library/LaunchAgents/*.plist` | `schtasks` / 服务 |
+| 开机自启 | `systemctl enable` | `launchctl bootstrap` | `/SC ONSTART` |
+| 崩溃重拉 | `Restart=always` | `KeepAlive=true` | 任务计划"失败时重启" / NSSM |
+| 看日志 | `journalctl -u` | `tail *.log` | 任务历史 / `*.log` |
+| 不依赖登录 | 系统级自带 | 系统级自带 | `/RU SYSTEM` 或 NSSM |
+
+**共同注意点**
+
+- 自启服务不继承交互式 shell 环境，**Python 路径、`DDNS_CONFIG` 一律写绝对路径**。
+- 每个实例用独立目录、独立 `DDNS_CONFIG`，避免状态文件并发写。
+- 首次部署后先手动 `python -m ddns` 跑通，确认能取到正确 IP、能更新记录，再交给服务管理器。
 
 ## 工作原理
 
