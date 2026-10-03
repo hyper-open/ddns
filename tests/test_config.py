@@ -293,6 +293,33 @@ source = "wlan0"
         self.assertEqual(cfg.records[0].source, "eth0")   # 继承
         self.assertEqual(cfg.records[1].source, "wlan0")  # 覆盖
 
+    def test_update_policy_default_exact(self):
+        cfg = load_config(write_toml(TENCENT_TOML),
+                          env={"TENCENT_ACCESS_KEY_ID": "i",
+                               "TENCENT_ACCESS_KEY_SECRET": "k"})
+        self.assertEqual(cfg.update_policy, "exact")
+
+    def test_update_policy_stable(self):
+        toml = '[ddns]\nprovider = "tencent"\nupdate_policy = "stable"\n'
+        cfg = load_config(write_toml(toml),
+                          env={"TENCENT_ACCESS_KEY_ID": "i",
+                               "TENCENT_ACCESS_KEY_SECRET": "k"})
+        self.assertEqual(cfg.update_policy, "stable")
+
+    def test_update_policy_case_insensitive(self):
+        toml = '[ddns]\nprovider = "tencent"\nupdate_policy = "STABLE"\n'
+        cfg = load_config(write_toml(toml),
+                          env={"TENCENT_ACCESS_KEY_ID": "i",
+                               "TENCENT_ACCESS_KEY_SECRET": "k"})
+        self.assertEqual(cfg.update_policy, "stable")
+
+    def test_update_policy_invalid(self):
+        toml = '[ddns]\nprovider = "tencent"\nupdate_policy = "nope"\n'
+        with self.assertRaises(ConfigError):
+            load_config(write_toml(toml),
+                        env={"TENCENT_ACCESS_KEY_ID": "i",
+                             "TENCENT_ACCESS_KEY_SECRET": "k"})
+
     def test_env_loaded_from_config_dir(self):
         """密钥从配置文件同级目录的 .env 读取，支持每实例独立目录。"""
         import os

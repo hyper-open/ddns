@@ -188,5 +188,86 @@ class TestSyncOnce(unittest.TestCase):
                          "2409:8a1e::9")
 
 
+class TestStablePolicy(unittest.TestCase):
+    """update_policy="stable" 的跳过/更新分支。"""
+
+    def _run(self, entries, new_ip, policy, same_prefix, has_local):
+        with mock.patch.multiple(
+            app,
+            get_current_ip=mock.Mock(return_value=new_ip),
+            is_same_prefix=mock.Mock(return_value=same_prefix),
+            has_local_address=mock.Mock(return_value=has_local),
+        ):
+            return app.sync_once(entries, None, "cloudflare", policy)
+
+    def _entry(self, rt="AAAA", last_ip="2409:8a1e:991c:c4b0:0001::1"):
+        t = Target("example.com", "home", rt)
+        p = FakeProvider()
+        return FakeEntry(t, p, "r1", last_ip=last_ip), p
+
+    def test_skip_when_same_prefix_and_old_still_present(self):
+        entry, p = self._entry()
+        with mock.patch.multiple(
+            app, get_current_ip=mock.Mock(return_value="2409:8a1e:991c:c4b0:0002::2"),
+            is_same_prefix=mock.Mock(return_value=True),
+            has_local_address=mock.Mock(return_value=True),
+        ):
+            app.sync_once([entry], None, "cloudflare", "stable")
+        self.assertEqual(p.calls, [])            # 跳过，不更新
+        self.assertEqual(entry.last_ip, "2409:8a1e:991c:c4b0:0001::1")
+
+    def test_update_when_old_address_gone(self):
+        # 旧地址已从系统消失 → 必须更新，避免 DNS 指向失效地址
+        entry, p = self._entry()
+        with mock.patch.multiple(
+            app, get_current_ip=mock.Mock(return_value="2409:8a1e:991c:c4b0:0002::2"),
+            is_same_prefix=mock.Mock(return_value=True),
+            has_local_address=mock.Mock(return_value=False),
+        ):
+            _, updates = app.sync_once([entry], None, "cloudflare", "stable")
+        self.assertEqual(len(p.calls), 1)
+        self.assertEqual(updates, 1)
+
+    def test_update_when_prefix_changed(self):
+        entry, p = self._entry()
+        with mock.patch.multiple(
+            app, get_current_ip=mock.Mock(return_value="2409:8a1e:9fff::2"),
+            is_same_prefix=mock.Mock(return_value=False),
+            has_local_address=mock.Mock(return_value=True),
+        ):
+            _, updates = app.sync_once([entry], None, "cloudflare", "stable")
+        self.assertEqual(updates, 1)
+
+    def test_ipv4_not_skipped_by_stable_policy(self):
+        entry, p = self._entry(rt="A", last_ip="8.8.8.1")
+        with mock.patch.multiple(
+            app, get_current_ip=mock.Mock(return_value="8.8.8.2"),
+            is_same_prefix=mock.Mock(return_value=True),
+            has_local_address=mock.Mock(return_value=True),
+        ):
+            _, updates = app.sync_once([entry], None, "cloudflare", "stable")
+        self.assertEqual(updates, 1)  # 仅 IPv6 生效
+
+    def test_exact_policy_always_updates(self):
+        entry, p = self._entry()
+        with mock.patch.multiple(
+            app, get_current_ip=mock.Mock(return_value="2409:8a1e:991c:c4b0:0002::2"),
+            is_same_prefix=mock.Mock(return_value=True),
+            has_local_address=mock.Mock(return_value=True),
+        ):
+            _, updates = app.sync_once([entry], None, "cloudflare", "exact")
+        self.assertEqual(updates, 1)  # exact 不看前缀
+
+    def test_no_last_ip_updates(self):
+        entry, p = self._entry(last_ip=None)
+        with mock.patch.multiple(
+            app, get_current_ip=mock.Mock(return_value="2409:8a1e:991c:c4b0:0002::2"),
+            is_same_prefix=mock.Mock(return_value=True),
+            has_local_address=mock.Mock(return_value=True),
+        ):
+            _, updates = app.sync_once([entry], None, "cloudflare", "stable")
+        self.assertEqual(updates, 1)  # 首次没有旧值，正常更新
+
+
 if __name__ == "__main__":
     unittest.main()

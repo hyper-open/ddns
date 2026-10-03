@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - 3.8~3.10 回退
     import tomli as tomllib
 
 VALID_RECORD_TYPES = ("A", "AAAA")
+VALID_UPDATE_POLICIES = ("exact", "stable")
 
 # 各服务商需要的密钥变量（.env），统一命名
 CREDENTIALS = {
@@ -57,6 +58,7 @@ class Config:
     check_interval: int
     log_level: str
     state_path: Path
+    update_policy: str = "exact"  # exact | stable（IPv6 同前缀抗抖动）
     options: dict = field(default_factory=dict)  # [<provider>] 段非敏感选项
     credentials: dict = field(default_factory=dict)  # 从 .env 读取的密钥
 
@@ -170,12 +172,20 @@ def load_config(
         if not state_path.is_absolute():
             state_path = config_path.parent / state_path
 
+    update_policy = str(common.get("update_policy", "exact")).lower()
+    if update_policy not in VALID_UPDATE_POLICIES:
+        raise ConfigError(
+            f"update_policy 只能是 {' 或 '.join(VALID_UPDATE_POLICIES)}，"
+            f"收到: {update_policy!r}"
+        )
+
     return Config(
         provider=provider,
         records=records,
         check_interval=int(common.get("check_interval", 60)),
         log_level=str(common.get("log_level", "INFO")).upper(),
         state_path=state_path,
+        update_policy=update_policy,
         options=options,
         credentials=credentials,
     )

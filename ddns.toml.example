@@ -7,6 +7,10 @@ provider = "tencent"
 check_interval = 60
 # 日志级别: DEBUG | INFO | WARNING | ERROR
 log_level = "INFO"
+# 更新策略: exact(默认) | stable
+#   exact  —— IP 变化即更新
+#   stable —— IPv6 新旧地址同 /64 且旧地址仍在本机时跳过更新，抗临时地址轮换抖动
+update_policy = "exact"
 # 可选：覆盖状态文件路径（相对路径相对本文件所在目录，默认 ddns_state.json）
 # state_file = "ddns_state.json"
 

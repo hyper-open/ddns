@@ -8,7 +8,10 @@
 """
 import ipaddress
 import logging
+import re
 import socket
+import subprocess
+import sys
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -139,6 +142,156 @@ def is_valid_public_ip(ip, record_type):
     return True
 
 
+# 判断"同一网段"用的前缀长度：IPv6 用 /64，IPv4 用 /24
+_PREFIX_LEN = {"A": 24, "AAAA": 64}
+
+
+def is_same_prefix(a, b, record_type):
+    """判断两个地址是否属于同一网段（A: /24，AAAA: /64）。非法地址返回 False。"""
+    if record_type not in _PREFIX_LEN:
+        return False
+    try:
+        addr_a = _ADDR_CLASS[record_type](str(a).strip())
+        addr_b = _ADDR_CLASS[record_type](str(b).strip())
+    except (ipaddress.AddressValueError, ValueError):
+        return False
+    net = ipaddress.ip_network(
+        f"{addr_a}/{_PREFIX_LEN[record_type]}", strict=False
+    )
+    return addr_b in net
+
+
+def has_local_address(ip, record_type):
+    """判断该地址当前是否存在于本机的任一网卡上（含临时/弃用地址）。
+
+    用于 stable 策略的安全判定：只有"已发布地址仍在本机"时才跳过更新，
+    地址过期消失后会返回 False，从而触发更新，避免 DNS 长期指向失效地址。
+    psutil 不可用时保守返回 False（宁可更新）。
+    """
+    if record_type not in _FAMILY:
+        return False
+    try:
+        import psutil
+    except ImportError:  # pragma: no cover
+        return False
+    family = _FAMILY[record_type]
+    target = str(ip).strip().split("%")[0]
+    try:
+        addrs = psutil.net_if_addrs()
+    except Exception:  # noqa: BLE001
+        return False
+    for snics in addrs.values():
+        for snic in snics:
+            if snic.family != family:
+                continue
+            if snic.address.split("%")[0] == target:
+                return True
+    return False
+
+
+# ===== 稳定地址识别（隐私扩展下优先使用不轮换的地址）=====
+
+def _stable_ipv6_macos():
+    """macOS：解析 ifconfig，返回稳定全局 IPv6 列表（排除 temporary）。
+
+    带回 {网卡名: [地址]} 便于旁路判断。解析失败返回 []。
+    """
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        log.debug("ifconfig 执行失败: %s", e)
+        return []
+    result, cur = {}, None
+    for line in out.splitlines():
+        if line and not line[0].isspace() and ":" in line:
+            cur = line.split(":")[0]
+        elif "inet6" in line:
+            if "temporary" in line:
+                continue
+            m = re.search(r"inet6\s+([0-9a-fA-F:]+)", line)
+            if not m:
+                continue
+            try:
+                addr = ipaddress.IPv6Address(m.group(1).split("%")[0])
+            except ValueError:
+                continue
+            if addr.is_global and not addr.is_multicast:
+                result.setdefault(cur, []).append(str(addr))
+    return result
+
+
+def _stable_ipv6_linux():
+    """Linux：读 /proc/net/if_inet6，排除 IFA_F_TEMPORARY(0x01)。
+
+    返回 {网卡名: [地址]}。文件不存在或解析失败返回 {}。
+    """
+    result = {}
+    try:
+        with open("/proc/net/if_inet6", "r") as f:
+            lines = f.readlines()
+    except OSError as e:
+        log.debug("读取 /proc/net/if_inet6 失败: %s", e)
+        return result
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        hexaddr, _idx, plen, scope, flags, ifname = parts[:6]
+        try:
+            if int(flags, 16) & 0x01:  # IFA_F_TEMPORARY
+                continue
+        except ValueError:
+            continue
+        try:
+            addr = ipaddress.IPv6Address(int(hexaddr, 16))
+        except (ValueError, OverflowError):
+            continue
+        if addr.is_global and not addr.is_multicast:
+            result.setdefault(ifname, []).append(str(addr))
+    return result
+
+
+def stable_ipv6_addresses():
+    """返回 {网卡名: [稳定全局 IPv6 地址]}。
+
+    仅支持 Linux 与 macOS（可从系统信息判断稳定/临时）；其他平台返回 {}。
+    """
+    if sys.platform == "darwin":
+        return _stable_ipv6_macos()
+    if sys.platform.startswith("linux"):
+        return _stable_ipv6_linux()
+    return {}
+
+
+def prefer_stable_ipv6(ip):
+    """给定一个全局 IPv6，若存在同 /64 的稳定地址则返回它，否则返回原值。
+
+    DNS 记录变更存在传播延迟，优先使用不随隐私扩展轮换的稳定地址可减少更新。
+    找不到稳定地址时返回原 ip（保持原行为）。
+    """
+    if not ip:
+        return ip
+    try:
+        addr = ipaddress.IPv6Address(str(ip).split("%")[0])
+    except ValueError:
+        return ip
+    if not addr.is_global:
+        return ip
+    net = ipaddress.ip_network(f"{addr}/64", strict=False)
+    for addrs in stable_ipv6_addresses().values():
+        for cand in addrs:
+            try:
+                if ipaddress.IPv6Address(cand) in net:
+                    if cand != str(ip):
+                        log.info("发现同网段稳定地址 %s，优先使用（原 %s）", cand, ip)
+                    return cand
+            except ValueError:
+                continue
+    return ip
+
+
+
 def get_local_ip(record_type, source=None):
     """本地探测：让内核选出到公网的实际出口源地址。
 
@@ -199,21 +352,43 @@ def get_public_ip(record_type, source=None, apis=None, http=None):
     return None
 
 
+def _is_explicit_ip(source, record_type):
+    """判断 source 是否为显式 IP（而非网卡名或空）。"""
+    if not source or record_type not in _FAMILY:
+        return False
+    try:
+        _ADDR_CLASS[record_type](str(source))
+    except (ipaddress.AddressValueError, ValueError):
+        return False
+    return True
+
+
 def get_current_ip(record_type, source=None):
-    """混合策略：本地优先，公网校验，不一致以公网为准，公网挂则降级本地。"""
+    """混合策略：本地优先，公网校验，不一致以公网为准，公网挂则降级本地。
+
+    对 IPv6 会优先使用同网段的稳定地址（若系统可识别），以减少隐私扩展下
+    临时地址轮换导致的 DNS 更新；显式指定了源 IP 时尊重用户选择，不替换。
+    """
     src = resolve_source(source, record_type)
     local_ip = get_local_ip(record_type, source)
     public_ip = get_public_ip(record_type, source)
 
     if local_ip and public_ip:
         if local_ip == public_ip:
-            return local_ip
-        log.info("本地(%s)与公网(%s)不一致（source=%s），采用公网地址",
-                 local_ip, public_ip, src)
-        return public_ip
-    if public_ip:
-        return public_ip
-    if local_ip:
+            result = local_ip
+        else:
+            log.info("本地(%s)与公网(%s)不一致（source=%s），采用公网地址",
+                     local_ip, public_ip, src)
+            result = public_ip
+    elif public_ip:
+        result = public_ip
+    elif local_ip:
         log.warning("外部API不可用，降级使用本地地址: %s", local_ip)
-        return local_ip
-    return None
+        result = local_ip
+    else:
+        return None
+
+    # IPv6：优先稳定地址；用户显式指定源 IP 时不替换
+    if record_type == "AAAA" and not _is_explicit_ip(source, record_type):
+        result = prefer_stable_ipv6(result)
+    return result

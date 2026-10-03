@@ -3,7 +3,7 @@ import logging
 import time
 
 from .config import Config
-from .ip import get_current_ip
+from .ip import get_current_ip, has_local_address, is_same_prefix
 from .providers import get_provider
 from .providers.base import Target
 from .state import StateStore
@@ -40,10 +40,13 @@ def _build_entries(cfg: Config):
     return entries
 
 
-def sync_once(entries, store, provider_name):
+def sync_once(entries, store, provider_name, update_policy="exact"):
     """执行一轮探测与同步。
 
     按 (记录类型, 出口) 缓存探测结果：相同出口只探测一次，不同出口分别探测。
+    update_policy="stable" 时，对 IPv6 若新旧地址同 /64 且旧地址仍在本机存在，
+    则跳过更新（避免隐私扩展临时地址轮换导致的 DNS 抖动）；旧地址一旦消失
+    会正常更新，保证 DNS 不会长期指向失效地址。
     返回 (探测次数, 成功更新次数)，便于测试与统计。
     """
     detected = {}
@@ -60,6 +63,13 @@ def sync_once(entries, store, provider_name):
             continue
         if current_ip == entry.last_ip:
             log.info("%s %s 未变化: %s", entry.target.fqdn, rt, current_ip)
+            continue
+        # stable 策略：同前缀且旧地址仍有效 → 视为未变化，跳过
+        if (update_policy == "stable" and rt == "AAAA" and entry.last_ip
+                and is_same_prefix(current_ip, entry.last_ip, rt)
+                and has_local_address(entry.last_ip, rt)):
+            log.info("%s %s 同前缀且旧地址仍有效，跳过: %s -> %s",
+                     entry.target.fqdn, rt, entry.last_ip, current_ip)
             continue
         log.info("%s %s 变化: %s -> %s",
                  entry.target.fqdn, rt, entry.last_ip, current_ip)
@@ -83,8 +93,8 @@ def run(cfg: Config) -> None:
         entry.last_ip = store.get(state_key(cfg.provider, entry.target))
 
     log.info(
-        "启动 DDNS 监控 | 服务商: %s | 记录 %d 条: %s",
-        cfg.provider, len(entries),
+        "启动 DDNS 监控 | 服务商: %s | 策略: %s | 记录 %d 条: %s",
+        cfg.provider, cfg.update_policy, len(entries),
         ", ".join(
             f"{e.target.fqdn}({e.target.record_type}"
             + (f",{e.source}" if e.source else "") + ")"
@@ -93,5 +103,5 @@ def run(cfg: Config) -> None:
     )
 
     while True:
-        sync_once(list(entries.values()), store, cfg.provider)
+        sync_once(list(entries.values()), store, cfg.provider, cfg.update_policy)
         time.sleep(cfg.check_interval)

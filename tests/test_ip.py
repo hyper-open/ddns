@@ -1,4 +1,5 @@
 """IP 探测模块测试。"""
+import socket
 import unittest
 from unittest import mock
 
@@ -220,12 +221,102 @@ class TestSourcedSession(unittest.TestCase):
         m.assert_not_called()
 
 
+class TestIsSamePrefix(unittest.TestCase):
+    def test_same_v6_prefix(self):
+        a = "2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"
+        b = "2409:8a1e:991c:c4b0:eca8:8231:7682:a471"
+        self.assertTrue(ipmod.is_same_prefix(a, b, "AAAA"))
+
+    def test_different_v6_prefix(self):
+        self.assertFalse(ipmod.is_same_prefix(
+            "2409:8a1e:991c:c4b0::1", "2409:8a1e:991c:c4b1::1", "AAAA"))
+
+    def test_same_v4_24(self):
+        self.assertTrue(ipmod.is_same_prefix("8.8.8.1", "8.8.8.200", "A"))
+
+    def test_different_v4_24(self):
+        self.assertFalse(ipmod.is_same_prefix("8.8.8.1", "8.8.9.1", "A"))
+
+    def test_cross_family_false(self):
+        self.assertFalse(ipmod.is_same_prefix("8.8.8.1", "2409:8a1e::1", "AAAA"))
+
+    def test_invalid_returns_false(self):
+        self.assertFalse(ipmod.is_same_prefix("nope", "2409:8a1e::1", "AAAA"))
+
+
+class TestHasLocalAddress(unittest.TestCase):
+    def _fake_psutil(self, addrs):
+        f = mock.MagicMock()
+        f.net_if_addrs.return_value = addrs
+        return f
+
+    def _snic(self, family, address):
+        return type("S", (), {"family": family, "address": address})()
+
+    def test_found_including_deprecated(self):
+        f = self._fake_psutil({
+            "eth0": [self._snic(socket.AF_INET6, "2409:8a1e::9")]
+        })
+        with mock.patch.dict("sys.modules", {"psutil": f}):
+            self.assertTrue(ipmod.has_local_address("2409:8a1e::9", "AAAA"))
+
+    def test_zone_id_stripped(self):
+        f = self._fake_psutil({
+            "eth0": [self._snic(socket.AF_INET6, "fe80::1%eth0")]
+        })
+        with mock.patch.dict("sys.modules", {"psutil": f}):
+            self.assertTrue(ipmod.has_local_address("fe80::1%eth0", "AAAA"))
+
+    def test_not_found(self):
+        f = self._fake_psutil({"eth0": []})
+        with mock.patch.dict("sys.modules", {"psutil": f}):
+            self.assertFalse(ipmod.has_local_address("2409:8a1e::9", "AAAA"))
+
+    def test_wrong_family_not_matched(self):
+        f = self._fake_psutil({
+            "eth0": [self._snic(socket.AF_INET, "8.8.8.8")]
+        })
+        with mock.patch.dict("sys.modules", {"psutil": f}):
+            self.assertFalse(ipmod.has_local_address("2409:8a1e::9", "AAAA"))
+
+    def test_psutil_missing_returns_false(self):
+        with mock.patch.dict("sys.modules", {"psutil": None}):
+            self.assertFalse(ipmod.has_local_address("2409:8a1e::9", "AAAA"))
+
+
+class TestPreferStableIPv6(unittest.TestCase):
+    def test_picks_stable_in_same_prefix(self):
+        stable = {"en0": ["2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"]}
+        with mock.patch.object(ipmod, "stable_ipv6_addresses",
+                               return_value=stable):
+            out = ipmod.prefer_stable_ipv6(
+                "2409:8a1e:991c:c4b0:eca8:8231:7682:a471")
+        self.assertEqual(out, "2409:8a1e:991c:c4b0:3f:abb5:22f6:483e")
+
+    def test_no_stable_returns_original(self):
+        with mock.patch.object(ipmod, "stable_ipv6_addresses",
+                               return_value={}):
+            tmp = "2409:8a1e:991c:c4b0:eca8:8231:7682:a471"
+            self.assertEqual(ipmod.prefer_stable_ipv6(tmp), tmp)
+
+    def test_stable_in_different_prefix_ignored(self):
+        stable = {"en0": ["2409:8a1e:991c:c4b1:3f:abb5:22f6:483e"]}
+        with mock.patch.object(ipmod, "stable_ipv6_addresses",
+                               return_value=stable):
+            tmp = "2409:8a1e:991c:c4b0:eca8:8231:7682:a471"
+            self.assertEqual(ipmod.prefer_stable_ipv6(tmp), tmp)
+
+    def test_none_passthrough(self):
+        self.assertIsNone(ipmod.prefer_stable_ipv6(None))
+
+
 class TestGetCurrentIP(unittest.TestCase):
-    def _patch(self, local, public):
+    def _patch(self, local, public, stable=None):
         return mock.patch.multiple(
             ipmod,
             get_local_ip=mock.Mock(return_value=local),
             get_public_ip=mock.Mock(return_value=public),
+            stable_ipv6_addresses=mock.Mock(return_value=stable or {}),
         )
 
     def test_both_equal_returns_that(self):
@@ -247,6 +338,26 @@ class TestGetCurrentIP(unittest.TestCase):
     def test_both_none(self):
         with self._patch(None, None):
             self.assertIsNone(ipmod.get_current_ip("AAAA"))
+
+    def test_prefers_stable_address(self):
+        stable = {"en0": ["2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"]}
+        with self._patch("2409:8a1e:991c:c4b0:eca8:8231:7682:a471",
+                         "2409:8a1e:991c:c4b0:eca8:8231:7682:a471", stable):
+            self.assertEqual(
+                ipmod.get_current_ip("AAAA"),
+                "2409:8a1e:991c:c4b0:3f:abb5:22f6:483e")
+
+    def test_explicit_source_ip_not_replaced(self):
+        stable = {"en0": ["2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"]}
+        explicit = "2409:8a1e:991c:c4b0:eca8:8231:7682:a471"
+        with self._patch(explicit, explicit, stable):
+            self.assertEqual(ipmod.get_current_ip("AAAA", source=explicit),
+                             explicit)
+
+    def test_ipv4_untouched_by_stable_logic(self):
+        stable = {"en0": ["2409:8a1e:991c:c4b0:3f:abb5:22f6:483e"]}
+        with self._patch("8.8.8.8", "8.8.8.8", stable):
+            self.assertEqual(ipmod.get_current_ip("A"), "8.8.8.8")
 
 
 if __name__ == "__main__":
