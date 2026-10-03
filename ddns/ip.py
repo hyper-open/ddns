@@ -19,11 +19,10 @@ from requests.adapters import HTTPAdapter
 log = logging.getLogger("ddns.ip")
 
 # 各记录类型依次尝试的公网 IP 查询接口
+# 注意：api.ipify.org 与 v4.ident.me 在国内网络不可达，已移除
 IP_APIS = {
     "A": [
-        "https://api.ipify.org",
         "https://ipv4.icanhazip.com",
-        "https://v4.ident.me",
         "https://api-ipv4.ip.sb/ip",
     ],
     "AAAA": [
