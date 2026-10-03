@@ -249,6 +249,50 @@ domain = ""
                         env={"ALIYUN_ACCESS_KEY_ID": "i",
                              "ALIYUN_ACCESS_KEY_SECRET": "s"})
 
+    def test_record_source(self):
+        toml = """
+[ddns]
+provider = "aliyun"
+domain = "example.com"
+
+[[records]]
+sub_domain = "home1"
+source = "eth0"
+
+[[records]]
+sub_domain = "home2"
+source = "2001:db8::10"
+
+[[records]]
+sub_domain = "default"
+"""
+        cfg = load_config(write_toml(toml),
+                          env={"ALIYUN_ACCESS_KEY_ID": "i",
+                               "ALIYUN_ACCESS_KEY_SECRET": "s"})
+        self.assertEqual(cfg.records[0].source, "eth0")
+        self.assertEqual(cfg.records[1].source, "2001:db8::10")
+        self.assertEqual(cfg.records[2].source, "")  # 未写为空
+
+    def test_source_inherited_from_common(self):
+        toml = """
+[ddns]
+provider = "aliyun"
+domain = "example.com"
+source = "eth0"
+
+[[records]]
+sub_domain = "a"
+
+[[records]]
+sub_domain = "b"
+source = "wlan0"
+"""
+        cfg = load_config(write_toml(toml),
+                          env={"ALIYUN_ACCESS_KEY_ID": "i",
+                               "ALIYUN_ACCESS_KEY_SECRET": "s"})
+        self.assertEqual(cfg.records[0].source, "eth0")   # 继承
+        self.assertEqual(cfg.records[1].source, "wlan0")  # 覆盖
+
     def test_env_loaded_from_config_dir(self):
         """密钥从配置文件同级目录的 .env 读取，支持每实例独立目录。"""
         import os

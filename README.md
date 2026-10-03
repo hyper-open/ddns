@@ -113,8 +113,9 @@ region = "cn-hangzhou"
 | `sub_domain` | | 默认主机前缀；根域名用 `@` 或留空 | 空 |
 | `record_type` | | 默认记录类型 `A` / `AAAA` | `AAAA` |
 | `ttl` | | 默认 TTL（秒） | `600` |
+| `source` | | 默认出口：源 IP 或网卡名（多上行时用） | 空（走默认路由） |
 
-`[[records]]` 每条记录可写：`domain`、`sub_domain`、`record_type`、`ttl`，未写的从 `[ddns]` 继承。
+`[[records]]` 每条记录可写：`domain`、`sub_domain`、`record_type`、`ttl`、`source`，未写的从 `[ddns]` 继承。
 
 > 省略 `[[records]]` 时，退化为 `[ddns]` 里的单条记录（向后兼容）。
 
@@ -152,6 +153,7 @@ region = "cn-hangzhou"
 | [`examples/cloudflare-multi.toml`](examples/cloudflare-multi.toml) | Cloudflare，多子域名 + 根域名 |
 | [`examples/huawei-ipv6.toml`](examples/huawei-ipv6.toml) | 华为云，IPv6 |
 | [`examples/mixed-records.toml`](examples/mixed-records.toml) | 同一服务商，A + AAAA 混合多记录 |
+| [`examples/multi-egress.toml`](examples/multi-egress.toml) | 多上行，把不同出口 IP 写到不同子域名 |
 
 ### 例 1：最简——阿里云单个 IPv6 子域名
 
@@ -292,6 +294,54 @@ DDNS_CONFIG=./ddns-instances/tencent/ddns.toml    python -m ddns &
 ```
 
 > 默认读当前目录的 `ddns.toml`；用 `DDNS_CONFIG` 环境变量可指定任意路径。
+
+### 例 7：多出口 IP（多上行分写不同域名）
+
+一台机器有多个公网出口（多网卡 / 多拨 / 多上行）时，给每条记录配 `source`，
+探测会**强制从该出口发包**，从而把每个出口各自的公网 IP 写到对应子域名。
+
+```toml
+[ddns]
+provider = "aliyun"
+domain = "example.com"
+
+[[records]]
+sub_domain = "home1"
+record_type = "AAAA"
+source = "eth0"              # 网卡名，自动解析为该网卡的 IPv6
+
+[[records]]
+sub_domain = "home2"
+record_type = "AAAA"
+source = "2001:db8::10"      # 直接给源地址
+
+[[records]]
+sub_domain = "backup"
+record_type = "A"
+source = "pppoe-wan"         # PPPoE 拨号出口
+
+[[records]]
+sub_domain = "default"
+record_type = "AAAA"         # 不写 source：走默认路由
+```
+
+**`source` 取值**
+
+| 写法 | 说明 |
+| --- | --- |
+| 留空 / 不写 | 走默认路由（与原行为一致） |
+| 源 IP，如 `192.168.1.2`、`2001:db8::10` | 跨平台、最精确，推荐 |
+| 网卡名，如 `eth0`、`pppoe-wan`、`wlan0` | 自动解析该网卡的地址；依赖 `psutil` |
+
+**要点**
+
+- 源 IP 的地址族必须与 `record_type` 匹配（`A` 用 IPv4，`AAAA` 用 IPv6），否则启动即报错。
+- 网卡名在 Linux 是接口名（`eth0`/`pppoe-wan`），Windows 是系统连接名（`以太网`、`WLAN`）；
+  多网卡多地址时取该地址族第一个非链路本地地址，需精确指定请直接写源 IP。
+- 同一 `(记录类型, 出口)` 每轮**只探测一次**，相同出口的多条记录复用结果：
+  上面 `home1`(eth0) 与 `default`(默认路由) 各探测一次，互不影响。
+- 出口地址写在探测 socket 上（本地探测 `bind`，公网 API 经带源地址的 HTTP 连接），
+  因此返回的是**该出口真实对外的公网 IP**，即使多出口共享同一默认路由也能区分。
 
 ## 运行
 
@@ -491,9 +541,9 @@ nssm start DDNS-aliyun
 
 ## 工作原理
 
-1. **探测**：每种记录类型先本地 `socket` 连一个公网目标，读取内核选出的出口源地址（快）；再用外部 API 从公网侧回看校验。两者不一致以公网为准，外网 API 全挂时降级用本地结果。
+1. **探测**：每种记录类型先本地 `socket` 连一个公网目标，读取内核选出的出口源地址（快）；再用外部 API 从公网侧回看校验。两者不一致以公网为准，外网 API 全挂时降级用本地结果。记录若配了 `source`，则先 `bind`/挂源地址适配器，强制从指定出口发包。
 2. **校验**：用 `ipaddress` 的 `is_global` 判定，丢弃私有 / 回环 / 链路本地 / ULA / CGNAT / 保留段地址。
-3. **比对**：与状态文件中上次记录比较，相同则跳过（不调 API）。
+3. **比对**：与状态文件中上次记录比较，相同则跳过（不调 API）。探测结果按 `(记录类型, 出口)` 缓存，同出口只探测一次。
 4. **更新**：变化时调用所选服务商 API 更新记录，成功后写回状态。
 
 ## 常见问题

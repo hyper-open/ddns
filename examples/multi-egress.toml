@@ -1,0 +1,43 @@
+# 多出口 IP · 把不同上行出口的 IP 分别写到不同子域名
+# 对应 .env：
+#   ALIYUN_ACCESS_KEY_ID=...
+#   ALIYUN_ACCESS_KEY_SECRET=...
+#
+# 每条记录的 source 指定出口，可为：
+#   - 源 IP 地址：跨平台，最精确
+#   - 网卡名：Linux 如 eth0 / pppoe-wan / wlan0；Windows 如 "以太网"、"WLAN"
+#   - 留空：走默认路由（与不写 source 一致）
+#
+# 同一 (记录类型, 出口) 每轮只探测一次，结果在相同出口的记录间复用。
+
+[ddns]
+provider = "aliyun"
+domain = "example.com"
+check_interval = 60
+log_level = "INFO"
+
+# 线路 1：主宽带（IPv6），按网卡名指定
+[[records]]
+sub_domain = "home1"
+record_type = "AAAA"
+source = "eth0"
+
+# 线路 2：第二条宽带（IPv6），直接给源地址
+[[records]]
+sub_domain = "home2"
+record_type = "AAAA"
+source = "2001:db8::10"
+
+# 线路 3：PPPoE 拨号出口（IPv4），按网卡名指定
+[[records]]
+sub_domain = "backup"
+record_type = "A"
+source = "pppoe-wan"
+
+# 未指定 source：走默认路由，与上面几条各自独立探测
+[[records]]
+sub_domain = "default"
+record_type = "AAAA"
+
+[aliyun]
+region = "cn-hangzhou"

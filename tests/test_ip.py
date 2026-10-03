@@ -129,6 +129,96 @@ class TestGetLocalIP(unittest.TestCase):
         with self.assertRaises(ValueError):
             ipmod.get_local_ip("TXT")
 
+    def test_binds_source_ip(self):
+        fake_sock = mock.MagicMock()
+        fake_sock.getsockname.return_value = ("8.8.8.8", 80)
+        with mock.patch.object(ipmod.socket, "socket", return_value=fake_sock):
+            self.assertEqual(ipmod.get_local_ip("A", source="192.168.1.2"), "8.8.8.8")
+        fake_sock.bind.assert_called_once_with(("192.168.1.2", 0))
+        fake_sock.connect.assert_called_once_with(ipmod.PROBE_TARGETS["A"])
+
+    def test_no_bind_when_no_source(self):
+        fake_sock = mock.MagicMock()
+        fake_sock.getsockname.return_value = ("8.8.8.8", 80)
+        with mock.patch.object(ipmod.socket, "socket", return_value=fake_sock):
+            ipmod.get_local_ip("A")
+        fake_sock.bind.assert_not_called()
+
+    def test_binds_source_for_v6(self):
+        fake_sock = mock.MagicMock()
+        fake_sock.getsockname.return_value = ("2409:8a1e::9", 80, 0, 0)
+        with mock.patch.object(ipmod.socket, "socket", return_value=fake_sock):
+            self.assertEqual(ipmod.get_local_ip("AAAA", source="2001:db8::10"),
+                             "2409:8a1e::9")
+        fake_sock.bind.assert_called_once_with(("2001:db8::10", 0))
+
+
+class TestResolveSource(unittest.TestCase):
+    def test_empty_returns_none(self):
+        self.assertIsNone(ipmod.resolve_source(None, "A"))
+        self.assertIsNone(ipmod.resolve_source("", "A"))
+
+    def test_ipv4_passthrough(self):
+        self.assertEqual(ipmod.resolve_source("192.168.1.2", "A"), "192.168.1.2")
+
+    def test_ipv6_passthrough(self):
+        self.assertEqual(ipmod.resolve_source("2001:db8::10", "AAAA"), "2001:db8::10")
+
+    def test_family_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            ipmod.resolve_source("192.168.1.2", "AAAA")
+
+    def test_link_local_rejected(self):
+        with self.assertRaises(ValueError):
+            ipmod.resolve_source("fe80::1", "AAAA")
+
+    def test_interface_name_resolved_via_psutil(self):
+        snic4 = type("S", (), {"family": ipmod.socket.AF_INET,
+                              "address": "192.168.1.2"})()
+        snic6 = type("S", (), {"family": ipmod.socket.AF_INET6,
+                              "address": "2001:db8::5%eth0"})()
+        fake_psutil = mock.MagicMock()
+        fake_psutil.net_if_addrs.return_value = {"eth0": [snic4, snic6]}
+        with mock.patch.dict("sys.modules", {"psutil": fake_psutil}):
+            self.assertEqual(ipmod.resolve_source("eth0", "AAAA"), "2001:db8::5")
+            self.assertEqual(ipmod.resolve_source("eth0", "A"), "192.168.1.2")
+
+    def test_unknown_interface_raises(self):
+        fake_psutil = mock.MagicMock()
+        fake_psutil.net_if_addrs.return_value = {"eth0": []}
+        with mock.patch.dict("sys.modules", {"psutil": fake_psutil}):
+            with self.assertRaises(ValueError):
+                ipmod.resolve_source("nosuchif", "A")
+
+    def test_interface_without_family_address_raises(self):
+        snic4 = type("S", (), {"family": ipmod.socket.AF_INET,
+                              "address": "192.168.1.2"})()
+        fake_psutil = mock.MagicMock()
+        fake_psutil.net_if_addrs.return_value = {"eth0": [snic4]}
+        with mock.patch.dict("sys.modules", {"psutil": fake_psutil}):
+            with self.assertRaises(ValueError):
+                ipmod.resolve_source("eth0", "AAAA")
+
+
+class TestSourcedSession(unittest.TestCase):
+    def test_same_source_reuses_session(self):
+        a = ipmod._session_for_source("192.168.1.2")
+        b = ipmod._session_for_source("192.168.1.2")
+        self.assertIs(a, b)
+
+    def test_public_ip_uses_sourced_session(self):
+        ipmod._sourced_sessions.clear()
+        fake = FakeSession({ipmod.IP_APIS["A"][0]: FakeResp("8.8.8.8")})
+        with mock.patch.object(ipmod, "_session_for_source", return_value=fake) as m:
+            self.assertEqual(ipmod.get_public_ip("A", source="192.168.1.2"), "8.8.8.8")
+        m.assert_called_once_with("192.168.1.2")
+
+    def test_public_ip_default_session_when_no_source(self):
+        fake = FakeSession({ipmod.IP_APIS["A"][0]: FakeResp("8.8.8.8")})
+        with mock.patch.object(ipmod, "_session_for_source") as m:
+            self.assertEqual(ipmod.get_public_ip("A", http=fake), "8.8.8.8")
+        m.assert_not_called()
+
 
 class TestGetCurrentIP(unittest.TestCase):
     def _patch(self, local, public):

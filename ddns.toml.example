@@ -15,6 +15,8 @@ domain = "example.com"
 record_type = "AAAA"
 ttl = 600
 sub_domain = ""
+# 默认出口（可被每条记录覆盖）：源 IP 或网卡名；留空走默认路由
+# source = ""
 
 # ===== 记录列表 =====
 # 一个进程探测一次 IP，扇出更新下面所有记录（同一服务商）。
@@ -24,6 +26,7 @@ sub_domain = ""
 domain = "example.com"
 sub_domain = "home"
 record_type = "AAAA"
+# source = "eth0"           # 指定出口（源 IP 或网卡名），多上行时用
 
 [[records]]
 domain = "example.com"

@@ -47,6 +47,7 @@ class RecordTarget:
     sub_domain: str
     record_type: str
     ttl: int
+    source: str = ""  # 出口：源 IP 或网卡名；空则走默认路由
 
 
 @dataclass
@@ -139,6 +140,7 @@ def load_config(
             sub_domain=str(item.get("sub_domain", common.get("sub_domain", ""))),
             record_type=rtype,
             ttl=int(item.get("ttl", common.get("ttl", 600))),
+            source=str(item.get("source", common.get("source", "")) or ""),
         ))
 
     options = data.get(provider) or {}
