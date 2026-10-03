@@ -1,0 +1,14 @@
+# 阿里云云解析 · 单个 IPv4 子域名
+# 对应 .env：
+#   ALIYUN_ACCESS_KEY_ID=...
+#   ALIYUN_ACCESS_KEY_SECRET=...
+
+[ddns]
+provider = "aliyun"
+record_type = "A"
+domain = "example.com"
+sub_domain = "nas"
+ttl = 600
+
+[aliyun]
+region = "cn-hangzhou"

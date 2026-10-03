@@ -1,0 +1,30 @@
+# 多域名 + A/AAAA 混合（同一服务商）
+# 对应 .env：
+#   ALIYUN_ACCESS_KEY_ID=...
+#   ALIYUN_ACCESS_KEY_SECRET=...
+#
+# 记录字段未写时继承 [ddns] 的默认值（domain / record_type / ttl / sub_domain）。
+
+[ddns]
+provider = "aliyun"
+check_interval = 120
+log_level = "INFO"
+
+[[records]]
+domain = "example.com"
+sub_domain = "home"
+record_type = "AAAA"
+
+[[records]]
+domain = "example.com"
+sub_domain = "vpn"
+record_type = "A"
+ttl = 60                    # 覆盖默认 TTL
+
+[[records]]
+domain = "other.com"        # 另一个主域名
+sub_domain = "@"            # 根域名
+record_type = "AAAA"
+
+[aliyun]
+region = "cn-hangzhou"

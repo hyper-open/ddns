@@ -1,0 +1,32 @@
+# Cloudflare · 多子域名 + 根域名
+# 对应 .env：
+#   CLOUDFLARE_API_TOKEN=...
+#
+# 一次运行同时维护：
+#   home.example.com  (AAAA)
+#   www.example.com   (A)
+#   example.com       (A, 根域名)
+# AAAA 只探测一次、A 只探测一次，共两次探测。
+
+[ddns]
+provider = "cloudflare"
+domain = "example.com"
+check_interval = 60
+log_level = "INFO"
+
+[[records]]
+sub_domain = "home"
+record_type = "AAAA"
+
+[[records]]
+sub_domain = "www"
+record_type = "A"
+
+[[records]]
+sub_domain = "@"          # 根域名，等价于 sub_domain = ""
+record_type = "A"
+
+[cloudflare]
+# 已知道 zone id 时可填，跳过 zone 查询
+# zone_id = "023e105f4ecef8ad9ca31a8372d0c353"
+proxied = false

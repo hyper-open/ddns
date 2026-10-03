@@ -1,0 +1,13 @@
+# 华为云 DNS · 单个 IPv6 子域名
+# 对应 .env：
+#   HUAWEI_ACCESS_KEY_ID=...
+#   HUAWEI_ACCESS_KEY_SECRET=...
+
+[ddns]
+provider = "huawei"
+record_type = "AAAA"
+domain = "example.com"
+sub_domain = "home"
+
+[huawei]
+region = "cn-north-4"     # 必填

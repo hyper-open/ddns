@@ -1,0 +1,14 @@
+# 腾讯云 DNSPod · 单个 IPv6 子域名
+# 对应 .env：
+#   TENCENT_ACCESS_KEY_ID=...
+#   TENCENT_ACCESS_KEY_SECRET=...
+
+[ddns]
+provider = "tencent"
+record_type = "AAAA"
+domain = "example.com"
+sub_domain = "home"
+check_interval = 60
+log_level = "INFO"
+
+[tencent]
