@@ -2,7 +2,6 @@
 
 # 渠道名称 -> 链接 / 说明。占位符请替换为真实链接，留空 "" 则不在 --donate 中展示。
 DONATE_CHANNELS = {
-    "GitHub Sponsors": "",  # 例如 https://github.com/sponsors/<user>
     "爱发电": "https://afdian.com/a/aiyuanchu",
     "支付宝": "",           # 例如收款码链接或 "手机支付宝扫码"
     "微信": "",             # 例如收款码链接或 "微信扫码"

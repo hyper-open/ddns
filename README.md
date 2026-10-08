@@ -4,6 +4,8 @@
 
 适合家宽 / 拨号线路 IPv4、IPv6 地址不固定，又需要稳定域名访问的场景（远程回家、自建服务、NAS、软路由等）。
 
+> 如果 ddns 对你有帮助，欢迎[捐赠支持](https://afdian.com/a/aiyuanchu)（也可运行 `ddns --donate` 查看捐赠方式）。
+
 支持的 DNS 服务商：
 
 | `provider` | 服务商 | 依赖 |
@@ -700,13 +702,6 @@ ddns/
 ├── .env.example
 └── pyproject.toml
 ```
-
-## 捐赠
-
-如果 ddns 对你有帮助，欢迎捐赠支持（运行 `ddns --donate` 也可查看）：
-
-- GitHub Sponsors: `https://github.com/sponsors/<你的用户名>`
-- 爱发电: `https://afdian.com/a/aiyuanchu`
 
 ## 许可证
 
