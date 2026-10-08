@@ -701,6 +701,13 @@ ddns/
 └── pyproject.toml
 ```
 
+## 捐赠
+
+如果 ddns 对你有帮助，欢迎捐赠支持（运行 `ddns --donate` 也可查看）：
+
+- GitHub Sponsors: `https://github.com/sponsors/<你的用户名>`
+- 爱发电: `https://afdian.com/a/aiyuanchu`
+
 ## 许可证
 
 [MIT](LICENSE)

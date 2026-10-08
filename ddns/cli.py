@@ -15,7 +15,14 @@ def main(argv=None) -> int:
     )
     parser.add_argument("-v", "--version", action="version",
                         version=f"%(prog)s {__version__}")
-    parser.parse_args(argv)
+    parser.add_argument("--donate", action="store_true",
+                        help="查看捐赠方式")
+    args = parser.parse_args(argv)
+
+    if args.donate:
+        from .donate import print_donate  # 延迟导入，保持 --help 轻量
+        print_donate()
+        return 0
 
     try:
         cfg = load_config()
