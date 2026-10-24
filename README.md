@@ -703,6 +703,13 @@ ddns/
 └── pyproject.toml
 ```
 
+## 联系作者
+
+- 技术问题 / Bug 反馈：请提 [Issue](../../issues)，方便沉淀给后来人
+- 交流 / 合作 / 授权：扫码添加微信（备注 GitHub）
+
+<p align="center"><img src="docs/images/wechat-qrcode.jpg" width="220" alt="作者微信"></p>
+
 ## 许可证
 
 [MIT](LICENSE)
